@@ -1109,6 +1109,13 @@ function renderPlanList(){
   hero.innerHTML = `<div class="t">Your plans</div>`;
   pageWrap.appendChild(hero);
 
+  const syncRow = document.createElement('div');
+  syncRow.className = 'px';
+  syncRow.style.flexShrink = '0';
+  syncRow.innerHTML = `<button class="btn ghost small btn-press" id="syncSheetBtn" style="margin-top:10px">⟳ Sync exercises from Sheet</button>`;
+  pageWrap.appendChild(syncRow);
+  syncRow.querySelector('#syncSheetBtn').addEventListener('click', openSheetSyncModal);
+
   const spacer = document.createElement('div');
   spacer.style.height = '22px';
   spacer.style.flexShrink = '0';
@@ -2159,6 +2166,58 @@ function renderSessionRunner(){
   bottomBar.querySelector('#zoomBtn').addEventListener('click', (e)=>pushExpand('sessionOverview', e.currentTarget));
   bottomBar.querySelector('#finishBtn').addEventListener('click', ()=>{
     openConfirm('Are you sure you want to end the session?', finishSession, 'End session');
+  });
+}
+
+function openSheetSyncModal(){
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-center';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="field-label">Google Sheet sync</div>
+      <input type="text" class="namefield" style="margin:0 0 10px 0;width:100%" id="sheetUrlInput" placeholder="Paste your Apps Script Web App URL" value="${state.sheetSyncUrl||''}">
+      <div class="sub" style="margin-bottom:14px">Reads Name (col A) and Category (col B: empujar/tirar) from your sheet, skipping the header row.</div>
+      <button class="btn primary btn-press" id="syncNowBtn" style="margin-bottom:8px">Sync now</button>
+      <button class="btn ghost btn-press" id="closeSyncBtn">Close</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeSyncBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
+  overlay.querySelector('#syncNowBtn').addEventListener('click', async ()=>{
+    const url = overlay.querySelector('#sheetUrlInput').value.trim();
+    if(!url) return;
+    state.sheetSyncUrl = url;
+    saveState();
+    const btn = overlay.querySelector('#syncNowBtn');
+    btn.textContent = 'Syncing…';
+    btn.disabled = true;
+    try{
+      const res = await fetch(url);
+      const data = await res.json();
+      let added = 0, updated = 0;
+      data.forEach(row=>{
+        const name = String(row.name||'').trim();
+        let category = String(row.category||'').trim().toLowerCase();
+        if(!name) return;
+        if(category!=='empujar' && category!=='tirar') category = 'empujar';
+        const existing = state.library.find(e=>e.name.toLowerCase()===name.toLowerCase());
+        if(existing){
+          if(existing.category !== category){ existing.category = category; updated++; }
+        } else {
+          const newEx = {id:uid(), name, category};
+          state.library.push(newEx);
+          state.baselines[newEx.id] = [{weight:20,reps:"10"},{weight:20,reps:"10"},{weight:20,reps:"10"}];
+          added++;
+        }
+      });
+      saveState();
+      document.body.removeChild(overlay);
+      openAlert(`Synced: ${added} added, ${updated} updated.`);
+      render();
+    }catch(err){
+      btn.textContent = 'Sync now';
+      btn.disabled = false;
+      openAlert('Could not sync. Check the URL and that the sheet is published correctly.');
+    }
   });
 }
 
