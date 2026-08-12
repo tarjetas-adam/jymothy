@@ -441,7 +441,7 @@ h1.hero{
 }
 .modal-sheet{
   background:var(--bg);width:92%;max-width:560px;border-radius:22px;
-  max-height:80vh;overflow-y:auto;padding-bottom:24px;
+  max-height:88vh;overflow-y:visible;padding-bottom:24px;
   border:1px solid var(--line);
   animation:modalSheetIn 1s cubic-bezier(.16,1,.3,1) both;
 }
@@ -918,7 +918,7 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
         item.style.width = r.width + 'px';
         item.style.margin = '0';
         item.style.zIndex = '999';
-        item.style.transition = 'transform .3s cubic-bezier(.16,1,.3,1)';
+        item.style.transition = 'transform .12s ease';
         item.style.transform = 'scale(1.02)';
         document.body.appendChild(item);
       },320);
@@ -1001,12 +1001,12 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
           placeholder.remove();
           container.insertBefore(item, siblings[targetIndex] || null);
           siblings.forEach(sib=>{
-            sib.style.transition = 'transform .48s cubic-bezier(.16,1,.3,1)';
+            sib.style.transition = 'transform .18s ease';
             sib.style.transform = '';
           });
           setTimeout(()=>{
             item.classList.remove('dragging');
-          }, 480);
+          }, 180);
           const ids = [...container.querySelectorAll(itemSelector)].map(it=>it.dataset.id);
           onReorder && onReorder(ids);
         } else if(!moved){
@@ -1294,8 +1294,9 @@ function renderPlanNewExercises(){
   if(firstRow) firstRow.style.marginTop = '0';
   attachSlowSnapScroll(scrollArea, '.list-row', 9);
   if(pendingScrollRestore !== null){
-    scrollArea.scrollTop = pendingScrollRestore;
+    const restoreY = pendingScrollRestore;
     pendingScrollRestore = null;
+    requestAnimationFrame(()=>{ scrollArea.scrollTop = restoreY; });
   }
 
   const addrow = document.createElement('div');
@@ -1610,7 +1611,7 @@ function openAddExercisesModal(plan){
     sheet.innerHTML = `
       <div class="topbar" style="padding-top:18px"><span class="title">Add exercises</span><button class="iconbtn btn-press" id="closeAddEx">✕</button></div>
       <div class="hero-mini px"><div class="t">${catLabel(plan.category)}</div></div>
-      <div id="addExList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;"></div>
+      <div id="addExList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;overscroll-behavior:contain;"></div>
       <div class="addrow"><input type="text" id="newExNameModal" placeholder="+ Add new exercise…"><button class="btn ghost small btn-press" id="addExBtnModal">Add</button></div>
       <div class="btn-row"><button class="btn primary btn-press ${pullCls}" id="addSaveBtnModal" ${localSel.length===0?'disabled':''}>Add to plan (${localSel.length})</button></div>
     `;
@@ -1646,8 +1647,9 @@ function openAddExercisesModal(plan){
       if(firstRow) firstRow.style.marginTop = '0';
       attachSlowSnapScroll(listEl, '.list-row', 6);
       if(modalScrollRestore !== null){
-        listEl.scrollTop = modalScrollRestore;
+        const restoreY = modalScrollRestore;
         modalScrollRestore = null;
+        requestAnimationFrame(()=>{ listEl.scrollTop = restoreY; });
       }
     }
     sheet.querySelector('#closeAddEx').addEventListener('click', ()=>document.body.removeChild(overlay));
