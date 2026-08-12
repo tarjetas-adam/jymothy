@@ -1215,12 +1215,32 @@ function renderPlanNewCategory(){
 
 function renderPlanNewExercises(){
   topbar(catLabel(wizard.category), pop);
+
+  const pageWrap = document.createElement('div');
+  pageWrap.style.display = 'flex';
+  pageWrap.style.flexDirection = 'column';
+  app.appendChild(pageWrap);
+
   const hero = document.createElement('div');
   hero.className='hero-mini px';
+  hero.style.flexShrink = '0';
+  hero.style.paddingBottom = '0';
   hero.innerHTML = `<div class="t">${wizard.category==='empujar'?'Push exercises':'Pull exercises'}</div><div class="sub" style="margin-top:2px">Tap to select the ones you do.</div>`;
-  app.appendChild(hero);
+  pageWrap.appendChild(hero);
 
-  const list = document.createElement('div');
+  const spacer = document.createElement('div');
+  spacer.style.height = '22px';
+  spacer.style.flexShrink = '0';
+  pageWrap.appendChild(spacer);
+
+  const scrollArea = document.createElement('div');
+  scrollArea.style.flex = '1';
+  scrollArea.style.minHeight = '0';
+  scrollArea.style.boxSizing = 'border-box';
+  scrollArea.style.overflowY = 'auto';
+  scrollArea.style.webkitOverflowScrolling = 'touch';
+  pageWrap.appendChild(scrollArea);
+
   state.library.filter(e=>e.category===wizard.category).forEach(ex=>{
     const row = document.createElement('div');
     const sel = wizard.selected.includes(ex.id);
@@ -1232,15 +1252,19 @@ function renderPlanNewExercises(){
       justToggledExId = ex.id;
       render();
     });
-    list.appendChild(row);
+    scrollArea.appendChild(row);
   });
   justToggledExId = null;
-  app.appendChild(list);
+
+  const firstRow = scrollArea.querySelector('.list-row');
+  if(firstRow) firstRow.style.marginTop = '0';
+  attachSlowSnapScroll(scrollArea, '.list-row', 9);
 
   const addrow = document.createElement('div');
   addrow.className='addrow';
+  addrow.style.flexShrink = '0';
   addrow.innerHTML = `<input type="text" id="newExName" placeholder="+ Add new exercise…"><button class="btn ghost small" id="addExBtn">Add</button>`;
-  app.appendChild(addrow);
+  pageWrap.appendChild(addrow);
   addrow.querySelector('#addExBtn').addEventListener('click', ()=>{
     const input = addrow.querySelector('#newExName');
     const name = input.value.trim();
@@ -1255,9 +1279,16 @@ function renderPlanNewExercises(){
 
   const btnRow = document.createElement('div');
   btnRow.className='btn-row';
+  btnRow.style.flexShrink = '0';
   btnRow.innerHTML = `<button class="btn primary ${wizard.category==='tirar'?'pull':''}" id="nextBtn" ${wizard.selected.length===0?'disabled':''}>Next (${wizard.selected.length})</button>`;
-  app.appendChild(btnRow);
+  pageWrap.appendChild(btnRow);
   btnRow.querySelector('#nextBtn').addEventListener('click', ()=>openPlanNameModal());
+
+  requestAnimationFrame(()=>{
+    const top = pageWrap.getBoundingClientRect().top;
+    const appBottomPad = parseFloat(getComputedStyle(app).paddingBottom) || 0;
+    pageWrap.style.height = `calc(100vh - ${top}px - ${appBottomPad}px)`;
+  });
 }
 
 function openRenamePlanModal(plan){
@@ -1540,7 +1571,7 @@ function openAddExercisesModal(plan){
     sheet.innerHTML = `
       <div class="topbar" style="padding-top:18px"><span class="title">Add exercises</span><button class="iconbtn btn-press" id="closeAddEx">✕</button></div>
       <div class="hero-mini px"><div class="t">${catLabel(plan.category)}</div></div>
-      <div id="addExList"></div>
+      <div id="addExList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;"></div>
       <div class="addrow"><input type="text" id="newExNameModal" placeholder="+ Add new exercise…"><button class="btn ghost small btn-press" id="addExBtnModal">Add</button></div>
       <div class="btn-row"><button class="btn primary btn-press ${pullCls}" id="addSaveBtnModal" ${localSel.length===0?'disabled':''}>Add to plan (${localSel.length})</button></div>
     `;
@@ -1562,6 +1593,9 @@ function openAddExercisesModal(plan){
         listEl.appendChild(row);
       });
       justToggledExId = null;
+      const firstRow = listEl.querySelector('.list-row');
+      if(firstRow) firstRow.style.marginTop = '0';
+      attachSlowSnapScroll(listEl, '.list-row', 6);
     }
     sheet.querySelector('#closeAddEx').addEventListener('click', ()=>document.body.removeChild(overlay));
     sheet.querySelector('#addExBtnModal').addEventListener('click', ()=>{
@@ -2178,10 +2212,25 @@ function openSheetSyncModal(){
       <input type="text" class="namefield" style="margin:0 0 10px 0;width:100%" id="sheetUrlInput" placeholder="Paste your Apps Script Web App URL" value="${state.sheetSyncUrl||''}">
       <div class="sub" style="margin-bottom:14px">Reads Name (col A) and Category (col B: empujar/tirar) from your sheet, skipping the header row.</div>
       <button class="btn primary btn-press" id="syncNowBtn" style="margin-bottom:8px">Sync now</button>
+      <button class="btn ghost btn-press" id="removeStartersBtn" style="margin-bottom:8px;color:var(--danger)">Remove starter exercises</button>
       <button class="btn ghost btn-press" id="closeSyncBtn">Close</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeSyncBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
+  overlay.querySelector('#removeStartersBtn').addEventListener('click', ()=>{
+    openConfirm('Remove the built-in starter exercises? Only ones you added yourself (including via Sheet sync) will remain.', ()=>{
+      const starterNames = new Set(DEFAULT_LIBRARY.map(e=>e.name.toLowerCase()));
+      const toRemove = state.library.filter(e=>starterNames.has(e.name.toLowerCase()));
+      const removeIds = new Set(toRemove.map(e=>e.id));
+      state.library = state.library.filter(e=>!removeIds.has(e.id));
+      state.plans.forEach(p=>{ p.exerciseIds = p.exerciseIds.filter(id=>!removeIds.has(id)); });
+      removeIds.forEach(id=>{ delete state.baselines[id]; delete state.increments[id]; });
+      saveState();
+      document.body.removeChild(overlay);
+      openAlert(`Removed ${toRemove.length} starter exercise${toRemove.length===1?'':'s'}.`);
+      render();
+    }, 'Remove');
+  });
   overlay.querySelector('#syncNowBtn').addEventListener('click', async ()=>{
     const url = overlay.querySelector('#sheetUrlInput').value.trim();
     if(!url) return;
