@@ -473,7 +473,7 @@ h1.hero{
 .overview-paper.paper-plain .session-ex-block.current{background:var(--card-2);}
 .session-ex-block{
   margin:4px 0;border-radius:14px;background:var(--card-2);
-  user-select:none;
+  touch-action:none;user-select:none;
   transition:transform .2s ease, box-shadow .2s ease, background .2s ease, margin .15s ease;
 }
 .session-ex-block.current{background:var(--bg-2);}
@@ -866,7 +866,7 @@ function getScrollParent(el){
     if(/(auto|scroll)/.test(cs.overflowY)) return p;
     p = p.parentElement;
   }
-  return null;
+  return document.scrollingElement || document.documentElement;
 }
 
 function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bottomInset,scrollBoundsEl}){
@@ -881,6 +881,8 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
     item.addEventListener('pointerdown', e=>{
       if(e.target.closest('.nodrag')) return;
       startX=e.clientX; startY=e.clientY; moved=false; dragging=false;
+      let lastMoveY = e.clientY;
+      const manualScrollParent = scrollBoundsEl || getScrollParent(container);
       timer = setTimeout(()=>{
         dragging=true;
         item.classList.add('dragging');
@@ -964,7 +966,14 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
           if(!moved && !dragging) clearTimeout(timer);
           moved=true;
         }
-        if(!dragging) return;
+        if(!dragging){
+          if(moved){
+            ev.preventDefault();
+            if(manualScrollParent) manualScrollParent.scrollTop += (lastMoveY - ev.clientY);
+          }
+          lastMoveY = ev.clientY;
+          return;
+        }
         ev.preventDefault();
         lastClientY = ev.clientY;
         item.style.transition = 'transform 0s';
