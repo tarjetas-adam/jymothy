@@ -630,6 +630,7 @@ async function saveState(){
 // ---------- helpers ----------
 function getEx(id){ return state.library.find(e=>e.id===id); }
 function guessBodyPart(ex){
+  if(ex.bodyPart) return ex.bodyPart;
   const n = ex.name.toLowerCase();
   const has = (...words) => words.some(w=>n.includes(w));
   if(has('bench','chest','pec','fly','flye','dip')) return 'Chest';
@@ -641,6 +642,18 @@ function guessBodyPart(ex){
   if(has('deadlift')) return 'Back';
   if(has('ab ','abs','core','plank','crunch')) return 'Core';
   return ex.category==='empujar' ? 'Chest' : 'Back';
+}
+const BODY_PART_ORDER = ['Chest','Shoulders','Triceps','Back','Biceps','Legs','Core'];
+function groupByBodyPart(exercises){
+  const groups = {};
+  exercises.forEach(ex=>{
+    const part = guessBodyPart(ex);
+    if(!groups[part]) groups[part] = [];
+    groups[part].push(ex);
+  });
+  Object.values(groups).forEach(list=>list.sort((a,b)=>a.name.localeCompare(b.name)));
+  const order = [...BODY_PART_ORDER, ...Object.keys(groups).filter(p=>!BODY_PART_ORDER.includes(p)).sort()];
+  return order.map(part=>({part, exercises:groups[part]||[]})).filter(g=>g.exercises.length);
 }
 function getBaseline(id){ return state.baselines[id] || [{weight:0,reps:"10"}]; }
 function getIncrement(id){ return state.increments[id] || 2.5; }
@@ -1241,18 +1254,27 @@ function renderPlanNewExercises(){
   scrollArea.style.webkitOverflowScrolling = 'touch';
   pageWrap.appendChild(scrollArea);
 
-  state.library.filter(e=>e.category===wizard.category).forEach(ex=>{
-    const row = document.createElement('div');
-    const sel = wizard.selected.includes(ex.id);
-    row.className = `list-row ${sel?'selected':''} ${wizard.category==='tirar'?'pull':''}${justToggledExId===ex.id?' row-pop':''}`;
-    row.innerHTML = `<div class="name">${ex.name}</div>`;
-    row.addEventListener('click', ()=>{
-      const i = wizard.selected.indexOf(ex.id);
-      if(i>=0) wizard.selected.splice(i,1); else wizard.selected.push(ex.id);
-      justToggledExId = ex.id;
-      render();
+  const grouped = groupByBodyPart(state.library.filter(e=>e.category===wizard.category));
+  grouped.forEach(({part, exercises})=>{
+    const lbl = document.createElement('div');
+    lbl.className = 'section-label';
+    lbl.textContent = part;
+    lbl.style.scrollSnapAlign = 'start';
+    lbl.style.scrollSnapStop = 'always';
+    scrollArea.appendChild(lbl);
+    exercises.forEach(ex=>{
+      const row = document.createElement('div');
+      const sel = wizard.selected.includes(ex.id);
+      row.className = `list-row ${sel?'selected':''} ${wizard.category==='tirar'?'pull':''}${justToggledExId===ex.id?' row-pop':''}`;
+      row.innerHTML = `<div class="name">${ex.name}</div>`;
+      row.addEventListener('click', ()=>{
+        const i = wizard.selected.indexOf(ex.id);
+        if(i>=0) wizard.selected.splice(i,1); else wizard.selected.push(ex.id);
+        justToggledExId = ex.id;
+        render();
+      });
+      scrollArea.appendChild(row);
     });
-    scrollArea.appendChild(row);
   });
   justToggledExId = null;
 
@@ -1579,18 +1601,27 @@ function openAddExercisesModal(plan){
     if(available.length===0){
       listEl.innerHTML = `<div class="empty"><div class="big">All added already</div>Every exercise in this category is already in the plan.</div>`;
     } else {
-      available.forEach(ex=>{
-        const row = document.createElement('div');
-        const sel = localSel.includes(ex.id);
-        row.className = `list-row btn-press ${sel?'selected':''} ${pullCls}${justToggledExId===ex.id?' row-pop':''}`;
-        row.innerHTML = `<div class="name">${ex.name}</div>`;
-        row.addEventListener('click', ()=>{
-          const i = localSel.indexOf(ex.id);
-          if(i>=0) localSel.splice(i,1); else localSel.push(ex.id);
-          justToggledExId = ex.id;
-          draw();
+      const grouped = groupByBodyPart(available);
+      grouped.forEach(({part, exercises})=>{
+        const lbl = document.createElement('div');
+        lbl.className = 'section-label';
+        lbl.textContent = part;
+        lbl.style.scrollSnapAlign = 'start';
+        lbl.style.scrollSnapStop = 'always';
+        listEl.appendChild(lbl);
+        exercises.forEach(ex=>{
+          const row = document.createElement('div');
+          const sel = localSel.includes(ex.id);
+          row.className = `list-row btn-press ${sel?'selected':''} ${pullCls}${justToggledExId===ex.id?' row-pop':''}`;
+          row.innerHTML = `<div class="name">${ex.name}</div>`;
+          row.addEventListener('click', ()=>{
+            const i = localSel.indexOf(ex.id);
+            if(i>=0) localSel.splice(i,1); else localSel.push(ex.id);
+            justToggledExId = ex.id;
+            draw();
+          });
+          listEl.appendChild(row);
         });
-        listEl.appendChild(row);
       });
       justToggledExId = null;
       const firstRow = listEl.querySelector('.list-row');
@@ -2210,7 +2241,7 @@ function openSheetSyncModal(){
     <div class="modal-card">
       <div class="field-label">Google Sheet sync</div>
       <input type="text" class="namefield" style="margin:0 0 10px 0;width:100%" id="sheetUrlInput" placeholder="Paste your Apps Script Web App URL" value="${state.sheetSyncUrl||''}">
-      <div class="sub" style="margin-bottom:14px">Reads Name (col A) and Category (col B: empujar/tirar) from your sheet, skipping the header row.</div>
+      <div class="sub" style="margin-bottom:14px">Reads Name (col A), Category (col B: empujar/tirar), and Body Part (col C, e.g. Chest/Back/Legs) from your sheet, skipping the header row.</div>
       <button class="btn primary btn-press" id="syncNowBtn" style="margin-bottom:8px">Sync now</button>
       <button class="btn ghost btn-press" id="removeStartersBtn" style="margin-bottom:8px;color:var(--danger)">Remove starter exercises</button>
       <button class="btn ghost btn-press" id="closeSyncBtn">Close</button>
@@ -2246,13 +2277,19 @@ function openSheetSyncModal(){
       data.forEach(row=>{
         const name = String(row.name||'').trim();
         let category = String(row.category||'').trim().toLowerCase();
+        let bodyPart = String(row.bodyPart||'').trim();
+        if(bodyPart) bodyPart = bodyPart.charAt(0).toUpperCase() + bodyPart.slice(1).toLowerCase();
         if(!name) return;
         if(category!=='empujar' && category!=='tirar') category = 'empujar';
         const existing = state.library.find(e=>e.name.toLowerCase()===name.toLowerCase());
         if(existing){
-          if(existing.category !== category){ existing.category = category; updated++; }
+          let changed = false;
+          if(existing.category !== category){ existing.category = category; changed = true; }
+          if(bodyPart && existing.bodyPart !== bodyPart){ existing.bodyPart = bodyPart; changed = true; }
+          if(changed) updated++;
         } else {
           const newEx = {id:uid(), name, category};
+          if(bodyPart) newEx.bodyPart = bodyPart;
           state.library.push(newEx);
           state.baselines[newEx.id] = [{weight:20,reps:"10"},{weight:20,reps:"10"},{weight:20,reps:"10"}];
           added++;
