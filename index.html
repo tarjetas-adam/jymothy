@@ -576,6 +576,7 @@ let newSetIndex = null;
 let planOpenExIds = new Set();
 let newPlanExIds = [];
 let justToggledExId = null;
+let pendingScrollRestore = null;
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -1271,6 +1272,7 @@ function renderPlanNewExercises(){
         const i = wizard.selected.indexOf(ex.id);
         if(i>=0) wizard.selected.splice(i,1); else wizard.selected.push(ex.id);
         justToggledExId = ex.id;
+        pendingScrollRestore = scrollArea.scrollTop;
         render();
       });
       scrollArea.appendChild(row);
@@ -1281,6 +1283,10 @@ function renderPlanNewExercises(){
   const firstRow = scrollArea.querySelector('.list-row');
   if(firstRow) firstRow.style.marginTop = '0';
   attachSlowSnapScroll(scrollArea, '.list-row', 9);
+  if(pendingScrollRestore !== null){
+    scrollArea.scrollTop = pendingScrollRestore;
+    pendingScrollRestore = null;
+  }
 
   const addrow = document.createElement('div');
   addrow.className='addrow';
@@ -1580,6 +1586,7 @@ function bindPlanExEditBody(list, plan){
 
 function openAddExercisesModal(plan){
   const localSel = [];
+  let modalScrollRestore = null;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-center';
   const sheet = document.createElement('div');
@@ -1618,6 +1625,7 @@ function openAddExercisesModal(plan){
             const i = localSel.indexOf(ex.id);
             if(i>=0) localSel.splice(i,1); else localSel.push(ex.id);
             justToggledExId = ex.id;
+            modalScrollRestore = listEl.scrollTop;
             draw();
           });
           listEl.appendChild(row);
@@ -1627,6 +1635,10 @@ function openAddExercisesModal(plan){
       const firstRow = listEl.querySelector('.list-row');
       if(firstRow) firstRow.style.marginTop = '0';
       attachSlowSnapScroll(listEl, '.list-row', 6);
+      if(modalScrollRestore !== null){
+        listEl.scrollTop = modalScrollRestore;
+        modalScrollRestore = null;
+      }
     }
     sheet.querySelector('#closeAddEx').addEventListener('click', ()=>document.body.removeChild(overlay));
     sheet.querySelector('#addExBtnModal').addEventListener('click', ()=>{
