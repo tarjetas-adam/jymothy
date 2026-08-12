@@ -878,8 +878,6 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
     let scrollParent=null, autoScrollRAF=null, lastClientY=0, initialScrollTop=0;
     let placeholder=null, floatOffsetX=0, floatOffsetY=0;
 
-    item.style.touchAction = 'none';
-
     item.addEventListener('pointerdown', e=>{
       if(e.target.closest('.nodrag')) return;
       startX=e.clientX; startY=e.clientY; moved=false; dragging=false;
@@ -962,7 +960,10 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
       }
 
       function onMove(ev){
-        if(Math.abs(ev.clientX-startX)>10 || Math.abs(ev.clientY-startY)>10) moved=true;
+        if(Math.abs(ev.clientX-startX)>10 || Math.abs(ev.clientY-startY)>10){
+          if(!moved && !dragging) clearTimeout(timer);
+          moved=true;
+        }
         if(!dragging) return;
         ev.preventDefault();
         lastClientY = ev.clientY;
