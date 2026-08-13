@@ -1611,7 +1611,7 @@ function openAddExercisesModal(plan){
     sheet.innerHTML = `
       <div class="topbar" style="padding-top:18px"><span class="title">Add exercises</span><button class="iconbtn btn-press" id="closeAddEx">✕</button></div>
       <div class="hero-mini px"><div class="t">${catLabel(plan.category)}</div></div>
-      <div id="addExList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;overscroll-behavior:contain;"></div>
+      <div id="addExList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;overscroll-behavior:contain;max-height:50vh;"></div>
       <div class="addrow"><input type="text" id="newExNameModal" placeholder="+ Add new exercise…"><button class="btn ghost small btn-press" id="addExBtnModal">Add</button></div>
       <div class="btn-row"><button class="btn primary btn-press ${pullCls}" id="addSaveBtnModal" ${localSel.length===0?'disabled':''}>Add to plan (${localSel.length})</button></div>
     `;
