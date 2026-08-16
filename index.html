@@ -192,6 +192,7 @@ h1.hero{
   transition:transform .3s ease, opacity .3s ease;
 }
 .btn:active{transform:scale(.96);opacity:.85;}
+.no-press-anim:active{transform:none !important;opacity:1 !important;}
 .btn.primary{background:var(--push);color:#160B07;}
 .btn.primary.pull{background:var(--pull);}
 .btn.ghost{background:var(--card);color:var(--text);border:1px solid var(--line);}
@@ -219,7 +220,7 @@ h1.hero{
   45%{ transform:scale(1.035); }
   100%{ transform:scale(1); }
 }
-.list-row.row-pop{ animation:rowTogglePop .45s ease; }
+.row-pop{ animation:rowTogglePop .45s ease; }
 .list-row .name{flex:1;font-size:15px;font-weight:600;}
 .check{
   width:22px;height:22px;border-radius:7px;border:2px solid var(--text-faint);
@@ -288,6 +289,39 @@ h1.hero{
   display:flex;align-items:center;gap:6px;
 }
 .set-summary .pausemark{color:var(--text-faint);font-size:12px;}
+.rep-range-note{color:var(--text-faint);font-size:12px;}
+.rep-range-fade{ animation:rangeNoteFade 2s ease forwards; }
+@keyframes rangeNoteFade{
+  0%{ opacity:1; }
+  55%{ opacity:1; }
+  100%{ opacity:0; }
+}
+.restopt-active{border-color:var(--push) !important;background:var(--push-dim) !important;}
+.restopt-active.pull{border-color:var(--pull) !important;background:var(--pull-dim) !important;}
+.rest-clock{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:32px;height:32px;border-radius:50%;border:2px solid var(--text);
+  font-family:'Space Mono',monospace;font-size:12px;color:var(--text);
+  flex-shrink:0;margin-left:12px;
+}
+.improve-arrows{
+  position:relative;display:inline-flex;flex-direction:column-reverse;align-items:center;
+  gap:0px;margin-left:2ch;height:1px;
+}
+.arrow-up{
+  position:absolute;left:50%;top:50%;
+  font-size:11px;line-height:.6;color:var(--text);opacity:0;
+  animation:arrowFade 2s ease forwards;
+}
+.arrow-up:nth-child(1){transform:translate(-50%,calc(-50% + 7px)) scaleX(1.6);}
+.arrow-up:nth-child(2){transform:translate(-50%,-50%) scaleX(1.6);}
+.arrow-up:nth-child(3){transform:translate(-50%,calc(-50% - 7px)) scaleX(1.6);}
+@keyframes arrowFade{
+  0%{ opacity:0; }
+  15%{ opacity:1; }
+  75%{ opacity:1; }
+  100%{ opacity:0; }
+}
 .logcheck{
   width:34px;height:34px;border-radius:10px;border:1.5px solid var(--line);background:none;
   color:var(--text-faint);font-size:16px;cursor:pointer;flex-shrink:0;
@@ -366,7 +400,7 @@ h1.hero{
 }
 .set-done.push{background:var(--push-dim);}
 .set-done.pull{background:var(--pull-dim);}
-.set-done .txt{font-family:'Space Mono',monospace;font-size:15px;}
+.set-done .txt{font-family:'Space Mono',monospace;font-size:15px;flex:1;display:flex;align-items:center;gap:6px;}
 @keyframes setLoggedPop{
   0%{ transform:scale(.9); opacity:.3; }
   55%{ transform:scale(1.05); opacity:1; }
@@ -432,9 +466,9 @@ h1.hero{
 @keyframes kickoffUp{ from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:translateY(0);} }
 @keyframes kickoffScale{ from{opacity:0;transform:scale(.85);} to{opacity:1;transform:scale(1);} }
 .progress-dots{display:flex;gap:5px;padding:0 24px 4px 24px;}
-.progress-dots .d{height:4px;flex:1;border-radius:2px;background:var(--line);}
-.progress-dots .d.filled{background:var(--push);}
-.progress-dots.pull .d.filled{background:var(--pull);}
+.progress-dots .d{height:4px;flex:1;border-radius:2px;background:var(--line);overflow:hidden;}
+.progress-dots .d-fill{height:100%;width:0%;background:var(--push);border-radius:2px;}
+.progress-dots.pull .d-fill{background:var(--pull);}
 .modal-overlay{
   position:fixed;inset:0;background:rgba(6,4,2,.75);backdrop-filter:blur(2px);
   display:flex;align-items:flex-end;justify-content:center;z-index:50;
@@ -577,6 +611,55 @@ let planOpenExIds = new Set();
 let newPlanExIds = [];
 let justToggledExId = null;
 let pendingScrollRestore = null;
+let improvedSetKey = null;
+let dotsFillAnimateFrom = null;
+let restTimerInterval = null;
+let restTimerEndTime = null;
+let restTimerExId = null;
+function tickRestClock(){
+  const el = document.getElementById('restClockNum');
+  if(!el || !restTimerEndTime){
+    if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
+    return;
+  }
+  if(el.dataset.exid !== restTimerExId) return;
+  const remain = Math.max(0, Math.ceil((restTimerEndTime - Date.now())/1000));
+  el.textContent = remain;
+  if(remain <= 0){
+    playGong();
+    if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
+    restTimerEndTime = null;
+    const finishedExId = restTimerExId;
+    const activeS = state.activeSession;
+    const plan = activeS ? state.plans.find(p=>p.id===activeS.planId) : null;
+    const fullSeconds = plan ? plan.restSeconds : 0;
+    setTimeout(()=>{
+      const el2 = document.getElementById('restClockNum');
+      if(!el2 || el2.dataset.exid !== finishedExId) return;
+      el2.style.transition = 'opacity 1.5s ease';
+      el2.style.opacity = '0';
+      setTimeout(()=>{
+        const el3 = document.getElementById('restClockNum');
+        if(!el3 || el3.dataset.exid !== finishedExId) return;
+        el3.textContent = fullSeconds;
+        el3.style.transition = 'opacity 1.5s ease';
+        el3.style.opacity = '1';
+      }, 1500);
+    }, 3000);
+  }
+}
+function checkImprovement(exId, i, exState){
+  const s = state.activeSession;
+  if(!s || !s.originalBaselines) return;
+  const origSets = s.originalBaselines[exId] || [];
+  const orig = origSets[i];
+  const cur = exState.sets[i];
+  if(!orig || !cur) return;
+  const cmp = compareSets(orig, cur);
+  if(cmp && cmp.type!=='flat' && cmp.type!=='weightDown'){
+    improvedSetKey = `${exId}:${i}`;
+  }
+}
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -698,7 +781,18 @@ function repBarHTML(str, cat){
 }
 function fmtDate(iso){
   const d = new Date(iso);
-  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+  const isThisYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString('en-GB', isThisYear
+    ? {day:'2-digit', month:'short'}
+    : {day:'2-digit', month:'short', year:'numeric'});
+}
+function fmtDuration(ms){
+  if(!ms || ms<=0) return null;
+  const totalMin = Math.round(ms/60000);
+  const h = Math.floor(totalMin/60);
+  const m = totalMin%60;
+  if(h>0) return `${h}h ${m}m`;
+  return `${m} min`;
 }
 function catLabel(c){ return c==='empujar' ? 'EMPUJAR' : 'TIRAR'; }
 
@@ -1050,12 +1144,17 @@ function render(){
   app.innerHTML = "";
   (renderers[screen]||renderHome)(params||{});
 }
-function topbar(title, onBack){
+function topbar(title, onBack, rightHTML, rightId, rightHandler){
   const bar = document.createElement('div');
   bar.className='topbar';
-  bar.innerHTML = `${onBack?'<button class="iconbtn" id="backBtn">‹</button>':'<span style="width:22px"></span>'}<span class="title">${title}</span><span style="width:22px"></span>`;
+  const rightPart = rightHTML || '<span style="width:22px"></span>';
+  bar.innerHTML = `${onBack?'<button class="iconbtn" id="backBtn">‹</button>':'<span style="width:22px"></span>'}<span class="title">${title}</span>${rightPart}`;
   app.appendChild(bar);
   if(onBack) bar.querySelector('#backBtn').addEventListener('click', onBack);
+  if(rightId && rightHandler){
+    const rightBtn = bar.querySelector('#'+rightId);
+    if(rightBtn) rightBtn.addEventListener('click', ()=>rightHandler(rightBtn));
+  }
 }
 
 // ---------- HOME ----------
@@ -1214,7 +1313,7 @@ function renderPlanList(){
   app.appendChild(btnRow);
   btnRow.querySelector('#newPlanBtn').addEventListener('click', ()=>{
     wizard = {selected:[]};
-    pushSwipe('planNewCategory');
+    pushSwipe('planNewExercises');
   });
 
   requestAnimationFrame(()=>{
@@ -1238,7 +1337,7 @@ function renderPlanNewCategory(){
 }
 
 function renderPlanNewExercises(){
-  topbar(catLabel(wizard.category), pop);
+  topbar('New Plan', pop);
 
   const pageWrap = document.createElement('div');
   pageWrap.style.display = 'flex';
@@ -1249,8 +1348,13 @@ function renderPlanNewExercises(){
   hero.className='hero-mini px';
   hero.style.flexShrink = '0';
   hero.style.paddingBottom = '0';
-  hero.innerHTML = `<div class="t">${wizard.category==='empujar'?'Push exercises':'Pull exercises'}</div><div class="sub" style="margin-top:2px">Tap to select the ones you do.</div>`;
+  hero.style.display = 'flex';
+  hero.style.alignItems = 'center';
+  hero.style.justifyContent = 'space-between';
+  hero.innerHTML = `<div><div class="t">Exercises</div><div class="sub" style="margin-top:2px">Tap to select the ones you do.</div></div>
+    <button class="btn ghost small btn-press" id="importRoutineBtn" style="width:auto;flex-shrink:0;margin-left:12px">Import</button>`;
   pageWrap.appendChild(hero);
+  hero.querySelector('#importRoutineBtn').addEventListener('click', ()=>openImportRoutineModal());
 
   const spacer = document.createElement('div');
   spacer.style.height = '22px';
@@ -1265,7 +1369,7 @@ function renderPlanNewExercises(){
   scrollArea.style.webkitOverflowScrolling = 'touch';
   pageWrap.appendChild(scrollArea);
 
-  const grouped = groupByBodyPart(state.library.filter(e=>e.category===wizard.category));
+  const grouped = groupByBodyPart(state.library);
   grouped.forEach(({part, exercises})=>{
     const lbl = document.createElement('div');
     lbl.className = 'section-label';
@@ -1276,19 +1380,24 @@ function renderPlanNewExercises(){
     exercises.forEach(ex=>{
       const row = document.createElement('div');
       const sel = wizard.selected.includes(ex.id);
-      row.className = `list-row ${sel?'selected':''} ${wizard.category==='tirar'?'pull':''}${justToggledExId===ex.id?' row-pop':''}`;
+      row.className = `list-row ${sel?'selected':''}`;
       row.innerHTML = `<div class="name">${ex.name}</div>`;
       row.addEventListener('click', ()=>{
         const i = wizard.selected.indexOf(ex.id);
         if(i>=0) wizard.selected.splice(i,1); else wizard.selected.push(ex.id);
-        justToggledExId = ex.id;
-        pendingScrollRestore = scrollArea.scrollTop;
-        render();
+        row.classList.toggle('selected');
+        row.classList.remove('row-pop');
+        row.offsetWidth;
+        row.classList.add('row-pop');
+        const nextBtn = document.getElementById('nextBtn');
+        if(nextBtn){
+          nextBtn.textContent = `Next (${wizard.selected.length})`;
+          nextBtn.disabled = wizard.selected.length===0;
+        }
       });
       scrollArea.appendChild(row);
     });
   });
-  justToggledExId = null;
 
   const firstRow = scrollArea.querySelector('.list-row');
   if(firstRow) firstRow.style.marginTop = '0';
@@ -1302,13 +1411,19 @@ function renderPlanNewExercises(){
   const addrow = document.createElement('div');
   addrow.className='addrow';
   addrow.style.flexShrink = '0';
-  addrow.innerHTML = `<input type="text" id="newExName" placeholder="+ Add new exercise…"><button class="btn ghost small" id="addExBtn">Add</button>`;
+  addrow.innerHTML = `<input type="text" id="newExName" placeholder="+ Add new exercise…">
+    <select id="newExCat" style="background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:0 8px;font-family:'Inter';font-size:13px;">
+      <option value="empujar">Empujar</option>
+      <option value="tirar">Tirar</option>
+    </select>
+    <button class="btn ghost small" id="addExBtn">Add</button>`;
   pageWrap.appendChild(addrow);
   addrow.querySelector('#addExBtn').addEventListener('click', ()=>{
     const input = addrow.querySelector('#newExName');
+    const cat = addrow.querySelector('#newExCat').value;
     const name = input.value.trim();
     if(!name) return;
-    const newEx = {id:uid(), name, category:wizard.category};
+    const newEx = {id:uid(), name, category:cat};
     state.library.push(newEx);
     state.baselines[newEx.id] = [{weight:20,reps:"10"},{weight:20,reps:"10"},{weight:20,reps:"10"}];
     wizard.selected.push(newEx.id);
@@ -1319,7 +1434,7 @@ function renderPlanNewExercises(){
   const btnRow = document.createElement('div');
   btnRow.className='btn-row';
   btnRow.style.flexShrink = '0';
-  btnRow.innerHTML = `<button class="btn primary ${wizard.category==='tirar'?'pull':''}" id="nextBtn" ${wizard.selected.length===0?'disabled':''}>Next (${wizard.selected.length})</button>`;
+  btnRow.innerHTML = `<button class="btn primary" id="nextBtn" ${wizard.selected.length===0?'disabled':''}>Next (${wizard.selected.length})</button>`;
   pageWrap.appendChild(btnRow);
   btnRow.querySelector('#nextBtn').addEventListener('click', ()=>openPlanNameModal());
 
@@ -1327,6 +1442,102 @@ function renderPlanNewExercises(){
     const top = pageWrap.getBoundingClientRect().top;
     const appBottomPad = parseFloat(getComputedStyle(app).paddingBottom) || 0;
     pageWrap.style.height = `calc(100vh - ${top}px - ${appBottomPad}px)`;
+  });
+}
+
+function buildPlanExportText(plan){
+  const lines = [`Plan: ${plan.name}`];
+  if(plan.restSeconds) lines.push(`Rest: ${plan.restSeconds} sec`);
+  lines.push('');
+  plan.exerciseIds.forEach(exId=>{
+    const ex = getEx(exId);
+    if(!ex) return;
+    const sets = getBaseline(exId);
+    if(sets.length===0) return;
+    const setsCount = sets.length;
+    const lastSet = sets[sets.length-1];
+    const repsPart = ex.repRangeNote ? ex.repRangeNote : String(lastSet.reps);
+    lines.push(`${ex.name}: ${setsCount}x${repsPart} @ ${lastSet.weight}kg`);
+  });
+  return lines.join('\n');
+}
+
+function copyPlanForAI(plan, btn){
+  const text = buildPlanExportText(plan);
+  const originalHTML = btn.innerHTML;
+  const showCopied = ()=>{
+    btn.innerHTML = '<span style="font-size:18px;">✓</span>';
+    setTimeout(()=>{ btn.innerHTML = originalHTML; }, 1200);
+  };
+  const showFailed = ()=>{
+    btn.innerHTML = '<span style="font-size:18px;">✕</span>';
+    setTimeout(()=>{ btn.innerHTML = originalHTML; }, 1500);
+  };
+  const fallbackCopy = ()=>{
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if(ok) showCopied();
+      else showFailed();
+    }catch(err){
+      showFailed();
+    }
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(showCopied).catch(fallbackCopy);
+  } else {
+    fallbackCopy();
+  }
+}
+
+function openRestSettingModal(plan){
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay modal-center';
+  const pullCls = plan.category==='tirar' ? 'pull' : '';
+  const options = [60,90,120];
+  overlay.innerHTML = `
+    <div class="modal-card modal-card-smooth" style="position:relative">
+      <button class="iconbtn btn-press" id="closeRestBtn" style="position:absolute;top:10px;right:10px;font-size:15px">✕</button>
+      <div class="field-label" style="margin-bottom:14px">How much rest do you want between sets?</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${options.map(sec=>`<button class="btn ghost no-press-anim ${pullCls} ${plan.restSeconds===sec?'restopt-active':''}" data-restopt="${sec}" style="transition:background .18s ease, border-color .18s ease;">${sec} sec</button>`).join('')}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeRestBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
+  overlay.querySelectorAll('[data-restopt]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const val = parseInt(btn.dataset.restopt,10);
+      const turningOn = plan.restSeconds !== val;
+      plan.restSeconds = turningOn ? val : 0;
+      saveState();
+      btn.style.transition = btn.style.transition + ', transform .12s ease';
+      btn.style.transform = 'scale(.96)';
+      setTimeout(()=>{ btn.style.transform = ''; }, 120);
+      overlay.querySelectorAll('[data-restopt]').forEach(other=>{
+        if(other!==btn) other.classList.remove('restopt-active');
+      });
+      if(turningOn){
+        btn.classList.remove('restopt-active');
+        setTimeout(()=>{ btn.classList.add('restopt-active'); }, 180);
+      } else {
+        btn.classList.remove('restopt-active');
+      }
+      setTimeout(()=>{
+        document.body.removeChild(overlay);
+        render();
+      }, 750);
+    });
   });
 }
 
@@ -1355,7 +1566,151 @@ function openRenamePlanModal(plan){
   });
 }
 
+function guessCategory(name){
+  const fakeEx = {name, category:'empujar'};
+  const part = guessBodyPart(fakeEx);
+  if(part==='Back' || part==='Biceps') return 'tirar';
+  return 'empujar';
+}
+
+const IMPORT_FORMAT_EXAMPLE = `Plan: Push Day
+Rest: 90 sec
+
+Bench Press: 3x10 @ 40kg
+Shoulder Press: 3x8 @ 20kg
+Triceps Pushdown: 3x12 @ 15kg`;
+
+const IMPORT_PROMPT_TEXT = `Convert my workout routine into exactly this plain text format, nothing else — no explanations, no markdown, no extra commentary, just the lines themselves. Give it to me as a single plain text block I can easily copy in one go and paste elsewhere:
+
+Plan: [name of the plan]
+Rest: [seconds] sec (only include this line if my routine specifies rest time between sets — otherwise leave it out)
+
+[Exercise name]: [sets]x[reps] @ [weight]kg
+[Exercise name]: [sets]x[reps] @ [weight]kg
+(one line per exercise — reps must be a single number, not a range like "8-10"; if my routine gives a range, pick one reasonable number in the middle)
+
+Example of the format:
+${IMPORT_FORMAT_EXAMPLE}
+
+Here is my routine — convert it to the format above:
+[paste your routine here]`;
+
+function openImportRoutineModal(){
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-center';
+  overlay.innerHTML = `
+    <div class="modal-card" style="width:92%;max-width:520px;">
+      <div class="field-label">Import a routine</div>
+      <div class="sub" style="margin-bottom:12px">Already have a routine written down? Copy the prompt below, paste it into any AI along with your routine, then paste what it gives you back here.</div>
+      <pre style="background:var(--bg-2);border-radius:10px;padding:12px;font-family:'Space Mono',monospace;font-size:12px;color:var(--text-dim);white-space:pre-wrap;margin-bottom:12px;">${IMPORT_FORMAT_EXAMPLE}</pre>
+      <button class="btn ghost small btn-press" id="copyTemplateBtn" style="width:100%;margin-bottom:14px;">Copy AI prompt</button>
+      <textarea id="importText" placeholder="Paste your routine here…" style="width:100%;min-height:160px;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:12px;font-family:'Space Mono',monospace;font-size:13px;box-sizing:border-box;margin-bottom:14px;"></textarea>
+      <div id="importError" style="color:var(--danger);font-size:13px;margin-bottom:10px;display:none;"></div>
+      <button class="btn primary btn-press" id="importBtn" style="margin-bottom:8px;">Import</button>
+      <button class="btn ghost btn-press" id="closeImportBtn">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeImportBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
+  overlay.querySelector('#copyTemplateBtn').addEventListener('click', ()=>{
+    const btn = overlay.querySelector('#copyTemplateBtn');
+    const showCopied = ()=>{
+      btn.textContent = 'Copied!';
+      setTimeout(()=>{ btn.textContent = 'Copy AI prompt'; }, 1500);
+    };
+    const fallbackCopy = ()=>{
+      try{
+        const ta = document.createElement('textarea');
+        ta.value = IMPORT_PROMPT_TEXT;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if(ok) showCopied();
+        else { btn.textContent = 'Copy failed — select text manually'; setTimeout(()=>{ btn.textContent = 'Copy AI prompt'; }, 2000); }
+      }catch(err){
+        btn.textContent = 'Copy failed — select text manually';
+        setTimeout(()=>{ btn.textContent = 'Copy AI prompt'; }, 2000);
+      }
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(IMPORT_PROMPT_TEXT).then(showCopied).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
+  });
+  overlay.querySelector('#importBtn').addEventListener('click', ()=>{
+    const raw = overlay.querySelector('#importText').value;
+    const errEl = overlay.querySelector('#importError');
+    errEl.style.display = 'none';
+    const lines = raw.split('\n').map(l=>l.trim()).filter(l=>l.length>0);
+    if(lines.length===0){
+      errEl.textContent = 'Paste a routine first.';
+      errEl.style.display = 'block';
+      return;
+    }
+    let planName = null;
+    let restSeconds = 0;
+    const exerciseLines = [];
+    lines.forEach(line=>{
+      const planMatch = line.match(/^plan\s*:\s*(.+)$/i);
+      if(planMatch){ planName = planMatch[1].trim(); return; }
+      if(/^category\s*:/i.test(line)) return;
+      const restMatch = line.match(/^rest\s*:\s*(\d+)/i);
+      if(restMatch){ restSeconds = parseInt(restMatch[1],10); return; }
+      const exMatch = line.match(/^(.+?):\s*(\d+)\s*x\s*(\d+)(?:\s*-\s*(\d+))?(?:\s*@\s*([\d.]+)\s*kg)?/i);
+      if(exMatch){
+        const repsLow = parseInt(exMatch[3],10);
+        const repsHigh = exMatch[4] ? parseInt(exMatch[4],10) : null;
+        exerciseLines.push({
+          name: exMatch[1].trim(),
+          sets: parseInt(exMatch[2],10),
+          reps: repsHigh || repsLow,
+          rangeNote: repsHigh ? `${repsLow}-${repsHigh}` : null,
+          weight: exMatch[5] ? parseFloat(exMatch[5]) : 20,
+        });
+      }
+    });
+    if(exerciseLines.length===0){
+      errEl.textContent = "Couldn't find any exercises. Check the format matches the template above.";
+      errEl.style.display = 'block';
+      return;
+    }
+    const exerciseIds = [];
+    exerciseLines.forEach(line=>{
+      let existing = state.library.find(e=>e.name.toLowerCase()===line.name.toLowerCase());
+      if(!existing){
+        existing = {id:uid(), name:line.name, category:guessCategory(line.name)};
+        state.library.push(existing);
+      }
+      if(line.rangeNote) existing.repRangeNote = line.rangeNote;
+      state.baselines[existing.id] = Array.from({length:Math.max(1,line.sets)}, ()=>({weight:line.weight, reps:String(line.reps)}));
+      exerciseIds.push(existing.id);
+    });
+    const pushCount = exerciseIds.filter(id=>{ const e=getEx(id); return e && e.category==='empujar'; }).length;
+    const category = (exerciseIds.length-pushCount) > pushCount ? 'tirar' : 'empujar';
+    const plan = {
+      id:uid(), name: planName || 'Imported Plan', category,
+      exerciseIds, createdAt:new Date().toISOString()
+    };
+    if(restSeconds) plan.restSeconds = restSeconds;
+    state.plans.push(plan);
+    saveState();
+    newPlanExIds = [...exerciseIds];
+    document.body.removeChild(overlay);
+    replaceSwipe('planDetail',{planId:plan.id});
+  });
+}
+
 function openPlanNameModal(){
+  const pushCount = wizard.selected.filter(id=>{ const e=getEx(id); return e && e.category==='empujar'; }).length;
+  const pullCount = wizard.selected.length - pushCount;
+  wizard.category = pullCount > pushCount ? 'tirar' : 'empujar';
   const overlay = document.createElement('div');
   overlay.className='modal-overlay modal-center';
   overlay.innerHTML = `
@@ -1382,13 +1737,19 @@ function openPlanNameModal(){
 function renderPlanDetail({planId}){
   const plan = state.plans.find(p=>p.id===planId);
   if(!plan){ toHome(); return; }
-  topbar('Plan', pop);
+  const copyIconSVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+  topbar('Plan', pop, `<button class="iconbtn" id="copyPlanTopBtn">${copyIconSVG}</button>`, 'copyPlanTopBtn', (btn)=>copyPlanForAI(plan, btn));
   const cat = plan.category==='empujar' ? 'push' : 'pull';
   const hero = document.createElement('div');
   hero.className='hero-mini px';
-  hero.innerHTML = `<div class="eyebrow ${cat}">${catLabel(plan.category)}</div><div class="t" id="planNameTap" style="cursor:pointer">${plan.name} <span style="font-size:16px;color:var(--text-faint);vertical-align:middle">✎</span></div>`;
+  hero.style.display = 'flex';
+  hero.style.alignItems = 'flex-start';
+  hero.style.justifyContent = 'space-between';
+  hero.innerHTML = `<div><div class="eyebrow ${cat}">${catLabel(plan.category)}</div><div class="t" id="planNameTap" style="cursor:pointer">${plan.name} <span style="font-size:16px;color:var(--text-faint);vertical-align:middle">✎</span></div></div>
+    <button class="btn ghost small btn-press" id="restSettingBtn" style="width:auto;flex-shrink:0;margin-left:12px;margin-top:19px;">Rest${plan.restSeconds?` · ${plan.restSeconds}s`:''}</button>`;
   app.appendChild(hero);
   hero.querySelector('#planNameTap').addEventListener('click', ()=>openRenamePlanModal(plan));
+  hero.querySelector('#restSettingBtn').addEventListener('click', ()=>openRestSettingModal(plan));
 
   [...planOpenExIds].forEach(id=>{ if(!plan.exerciseIds.includes(id)) planOpenExIds.delete(id); });
 
@@ -1455,6 +1816,7 @@ function renderPlanDetail({planId}){
 
 function renderPlanExEditBody(ex, exId, plan, cat){
   const sets = getBaseline(exId);
+  const rangeNoteHTML = ex.repRangeNote ? ` <span class="rep-range-note nodrag">(${ex.repRangeNote})</span>` : '';
   const setsHTML = sets.map((s,si)=>{
     const {segments} = parseReps(s.reps);
     let repsHTML = `<button class="numfield-plain nodrag" data-pfield="repsA" data-exid="${exId}" data-si="${si}">${segments[0]}</button>`;
@@ -1467,7 +1829,7 @@ function renderPlanExEditBody(ex, exId, plan, cat){
       <span class="set-num">${si+1}</span>
       <button class="numfield-plain nodrag" data-pfield="weight" data-exid="${exId}" data-si="${si}">${s.weight}kg</button>
       <span class="x nodrag">×</span>
-      ${repsHTML}
+      ${repsHTML}${rangeNoteHTML}
       <span class="dc-group">
         <button class="pausebtn pausebtn-fixed nodrag" data-pausesi="${si}" data-exid="${exId}">${pauseLabel}</button>
         <span class="delsetbtn delsetbtn-x nodrag" data-delsi="${si}" data-exid="${exId}">×</span>
@@ -1477,7 +1839,7 @@ function renderPlanExEditBody(ex, exId, plan, cat){
   return `<div class="sx-planedit nodrag">
     <div style="margin-top:2px;">${setsHTML}</div>
     <button class="btn ghost small nodrag btn-press" data-addset="${exId}" style="width:100%;margin-top:8px;">+ Add set</button>
-    <button class="btn ghost small nodrag btn-press" data-removeex="${exId}" style="width:100%;margin-top:8px;color:var(--danger)">Remove from plan</button>
+    <button class="btn ghost small nodrag btn-press" data-removeex="${exId}" style="width:100%;margin-top:14px;color:var(--danger)">Remove from plan</button>
   </div>`;
 }
 
@@ -1992,6 +2354,8 @@ function startSession(plan){
     originalBaselines,
   };
   saveState();
+  if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
+  restTimerEndTime = null; restTimerExId = null;
   editRow = null; editRowExId = null; lastShownExId = null; justLoggedKey = null; revealDelayKey = null; newSetIndex = null;
   nav = [{screen:'home'},{screen:'sessionRunner'}];
   render();
@@ -2030,15 +2394,54 @@ function renderSessionRunner(){
   dots.className=`progress-dots ${cat==='tirar'?'pull':''}`;
   s.exerciseOrder.forEach((id,i)=>{
     const d = document.createElement('div');
-    d.className = 'd'+(i<=idx?' filled':'');
+    d.className = 'd';
+    const fill = document.createElement('div');
+    fill.className = 'd-fill';
+    let pct = 0;
+    if(i < idx) pct = 100;
+    else if(i === idx){
+      const st = s.exercisesState[id];
+      const totalSets = st.sets.length;
+      const doneCount = st.sets.filter(x=>x.done).length;
+      pct = totalSets>0 ? Math.round((doneCount/totalSets)*100) : 0;
+    }
+    fill.dataset.targetPct = pct;
+    d.appendChild(fill);
     dots.appendChild(d);
   });
   app.appendChild(dots);
+  requestAnimationFrame(()=>{
+    const fills = dots.querySelectorAll('.d-fill');
+    fills.forEach((fill,i)=>{
+      const target = parseFloat(fill.dataset.targetPct);
+      if(i === idx && dotsFillAnimateFrom !== null){
+        fill.style.transition = 'none';
+        fill.style.width = dotsFillAnimateFrom + '%';
+        fill.offsetHeight;
+        fill.style.transition = 'width 1.4s cubic-bezier(.16,1,.3,1)';
+        fill.style.width = target + '%';
+      } else {
+        fill.style.transition = 'none';
+        fill.style.width = target + '%';
+      }
+    });
+    dotsFillAnimateFrom = null;
+  });
 
   const hero = document.createElement('div');
   hero.className='hero-mini px'+(advanced?' ex-enter':'');
+  const planForRest = state.plans.find(p=>p.id===s.planId);
+  const planRestSeconds = planForRest ? planForRest.restSeconds : 0;
+  let clockDisplay = planRestSeconds || null;
+  if(restTimerExId === exId && restTimerEndTime){
+    clockDisplay = Math.max(0, Math.ceil((restTimerEndTime - Date.now())/1000));
+  }
+  const clockHTML = planRestSeconds ? `<span class="rest-clock"><span id="restClockNum" data-exid="${exId}">${clockDisplay}</span></span>` : '';
   hero.innerHTML = `<div class="eyebrow ${cat==='empujar'?'push':'pull'}">Exercise ${idx+1} of ${total}</div>
-    <div class="t">${ex ? ex.name : '—'}</div>`;
+    <div style="display:flex;align-items:center;">
+      <div class="t" id="exTitleText">${ex ? ex.name : '—'}</div>
+      ${clockHTML}
+    </div>`;
   app.appendChild(hero);
 
   const list = document.createElement('div');
@@ -2056,7 +2459,7 @@ function renderSessionRunner(){
       }
       return;
     }
-    const delay = justLoggedKey ? 1300 : 0;
+    const delay = justLoggedKey ? 1500 : 0;
     render();
     setTimeout(()=>{
       if(s.currentIndex < total-1){ s.currentIndex++; saveState(); render(); window.scrollTo(0,0); }
@@ -2071,9 +2474,18 @@ function renderSessionRunner(){
     if(s2.done){
       const justLogged = justLoggedKey === `${exId}:${i}`;
       row.className='set-done '+(cat==='tirar'?'pull':'push')+(justLogged?' just-logged':'');
-      row.innerHTML = `<span class="set-num">${i+1}</span><span class="txt">${s2.weight} kg × ${fmtReps(s2.reps)}</span>`;
+      const justImproved = improvedSetKey === `${exId}:${i}`;
+      const improveHTML = justImproved ? `
+        <span class="improve-arrows">
+          <span class="arrow-up" style="animation-delay:0ms">^</span>
+          <span class="arrow-up" style="animation-delay:220ms">^</span>
+          <span class="arrow-up" style="animation-delay:440ms">^</span>
+        </span>` : '';
+      const rangeNoteHTML = (ex && ex.repRangeNote && justLogged) ? ` <span class="rep-range-note rep-range-fade">(${ex.repRangeNote})</span>` : '';
+      row.innerHTML = `<span class="set-num">${i+1}</span><span class="txt">${s2.weight} kg × ${fmtReps(s2.reps)}${rangeNoteHTML}${improveHTML}</span>`;
       row.dataset.i = i;
       if(justLogged) justLoggedKey = null;
+      if(justImproved) improvedSetKey = null;
     } else if(editRow===i){
       row.className='set-edit set-edit-boxed set-edit-session';
       const stepCls = cat==='tirar'?'pull':'push';
@@ -2098,9 +2510,10 @@ function renderSessionRunner(){
       const canLog = !blocked && !suppressed;
       const isNew = newSetIndex === i;
       row.className='set-line'+` ${cat==='tirar'?'pull':'push'}`+(isNew?' set-new':'');
+      const rangeNoteHTML = (ex && ex.repRangeNote) ? ` <span class="rep-range-note">(${ex.repRangeNote})</span>` : '';
       row.innerHTML = `
         <span class="set-num">${i+1}</span>
-        <span class="set-summary" data-i="${i}">${s2.weight} kg × ${fmtReps(s2.reps)}</span>
+        <span class="set-summary" data-i="${i}">${s2.weight} kg × ${fmtReps(s2.reps)}${rangeNoteHTML}</span>
         <button class="logcheck ${cat==='tirar'?'pull':'push'}${canLog?'':' invisible'}" data-i="${i}">✓</button>`;
       blocked = true;
       if(isNew) newSetIndex = null;
@@ -2133,7 +2546,8 @@ function renderSessionRunner(){
     const i = el.dataset.i, field = el.dataset.field;
     if(field==='weight'){
       openNumpad(exState.sets[i].weight, 'Weight (kg)', true, v=>{
-        exState.sets[i].weight = v; saveState(); render();
+        exState.sets[i].weight = v;
+        saveState(); render();
       });
     } else if(field==='repsA'){
       const {segments} = parseReps(exState.sets[i].reps);
@@ -2220,12 +2634,36 @@ function renderSessionRunner(){
   }));
   list.querySelectorAll('.logcheck').forEach(btn=>btn.addEventListener('click',()=>{
     const i=btn.dataset.i;
+    const totalSetsForBar = exState.sets.length;
+    const doneBefore = exState.sets.filter(x=>x.done).length;
+    dotsFillAnimateFrom = totalSetsForBar>0 ? Math.round((doneBefore/totalSetsForBar)*100) : 0;
     exState.sets[i].done = !exState.sets[i].done;
+    let improved = false;
+    if(exState.sets[i].done){
+      checkImprovement(exId, i, exState);
+      improved = improvedSetKey === `${exId}:${i}`;
+    }
     justLoggedKey = `${exId}:${i}`;
     revealDelayKey = `${exId}:${i}`;
     editRow = null;
-    playBeep(880, 90, 0.18);
-    setTimeout(()=>playBeep(1320, 140, 0.16), 70);
+    if(improved){
+      playBeep(700, 130, 0.18);
+      setTimeout(()=>playBeep(950, 130, 0.18), 220);
+      setTimeout(()=>playBeep(1300, 180, 0.2), 440);
+    } else {
+      playBeep(880, 90, 0.18);
+      setTimeout(()=>playBeep(1320, 140, 0.16), 70);
+    }
+    if(exState.sets[i].done){
+      const planForTimer = state.plans.find(p=>p.id===s.planId);
+      const restSecs = planForTimer ? planForTimer.restSeconds : 0;
+      if(restSecs){
+        restTimerExId = exId;
+        restTimerEndTime = Date.now() + restSecs*1000;
+        if(restTimerInterval) clearInterval(restTimerInterval);
+        restTimerInterval = setInterval(tickRestClock, 1000);
+      }
+    }
     maybeAdvance();
   }));
 
@@ -2458,6 +2896,8 @@ function renderSessionOverview(){
 }
 
 function finishSession(){
+  if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
+  restTimerEndTime = null; restTimerExId = null;
   const s = state.activeSession;
   const plan = state.plans.find(p=>p.id===s.planId);
   const loggedExercises = [];
@@ -2471,48 +2911,36 @@ function finishSession(){
     if(doneSets.length===0) return;
     loggedExercises.push({ exerciseId:exId, name:ex.name, sets:doneSets.map(x=>({weight:x.weight,reps:x.reps})) });
 
-    // auto-progression: if all baseline sets were completed as done and the
-    // heaviest (last) set had no pause split, bump weights slightly next time.
-    // (this only affects the NEXT session's starting numbers, not this summary)
-    const baseline = getBaseline(exId);
-    const allDone = st.sets.length>0 && st.sets.every(x=>x.done);
-    const last = st.sets[st.sets.length-1];
-    if(allDone && last && !String(last.reps).includes('+')){
-      const newBaseline = baseline.map(b=>({weight: Math.round((b.weight+2.5)*10)/10, reps:b.reps}));
-      state.baselines[exId] = newBaseline;
-    }
-
-    // manual improvement: did the person log more weight or more reps than
-    // the plan's starting numbers on any set, during THIS session?
+    // per-set progression: for every set that was logged, if it's an
+    // improvement over the plan's starting number for that set, keep the
+    // logged value as the new baseline going forward. Sets that weren't
+    // logged, or weren't an improvement, keep their original value.
     const origSets = origBaselines[exId] || [];
-    for(let i=0;i<st.sets.length;i++){
-      const cur = st.sets[i];
+    let exerciseBumped = false;
+    const newBaseline = st.sets.map((cur,i)=>{
       const orig = origSets[i];
-      if(!orig) continue;
-      if(cur.weight > orig.weight){
-        bumps.push({exerciseId:exId, name:ex.name, from:orig.weight, to:cur.weight});
-        break;
+      if(!cur.done || !orig) return orig ? {weight:orig.weight, reps:orig.reps} : {weight:cur.weight, reps:cur.reps};
+      const cmp = compareSets(orig, cur);
+      if(cmp && cmp.type!=='flat' && cmp.type!=='weightDown'){
+        if(!exerciseBumped){
+          exerciseBumped = true;
+          if(cmp.type==='weight'){
+            bumps.push({exerciseId:exId, name:ex.name, from:cmp.from, to:cmp.to});
+          } else {
+            bumps.push({exerciseId:exId, name:ex.name, fromReps:orig.reps, toReps:cur.reps});
+          }
+        }
+        return {weight:cur.weight, reps:cur.reps};
       }
-      const origParsed = parseReps(orig.reps);
-      const curParsed = parseReps(cur.reps);
-      if(cur.weight === orig.weight && curParsed.total > origParsed.total){
-        bumps.push({exerciseId:exId, name:ex.name, fromReps:orig.reps, toReps:cur.reps});
-        break;
-      }
-      // same weight, same total reps, but a stronger split (more reps done
-      // before the pause) still counts as an improvement, e.g. 7+3 -> 8+2
-      if(cur.weight === orig.weight && curParsed.total === origParsed.total
-        && curParsed.segments.length>1 && origParsed.segments.length>1
-        && curParsed.segments[0] > origParsed.segments[0]){
-        bumps.push({exerciseId:exId, name:ex.name, fromReps:orig.reps, toReps:cur.reps});
-        break;
-      }
-    }
+      return {weight:orig.weight, reps:orig.reps};
+    });
+    state.baselines[exId] = newBaseline;
   });
 
+  const durationMs = s.startedAt ? Math.max(0, Date.now() - new Date(s.startedAt).getTime()) : 0;
   const session = {
     id:s.id, planId:s.planId, planName:s.planName, category:s.category,
-    date:new Date().toISOString(), exercises:loggedExercises,
+    date:new Date().toISOString(), exercises:loggedExercises, durationMs,
   };
   state.sessions.unshift(session);
   state.activeSession = null;
@@ -2522,15 +2950,36 @@ function finishSession(){
   wizard.lastSession = session;
   render();
   window.scrollTo(0,0);
+  app.classList.add('swipe-card');
+  app.style.transformOrigin = 'left center';
+  app.style.transition = 'none';
+  app.style.transform = 'translateX(-45%)';
+  app.style.opacity = '0.5';
+  app.offsetHeight;
+  app.style.transition = 'transform .95s cubic-bezier(.19,1,.22,1), opacity .5s ease';
+  app.style.transform = 'translateX(0)';
+  app.style.opacity = '1';
+  setTimeout(()=>{
+    app.style.transition = '';
+    app.style.transform = '';
+    app.style.opacity = '';
+    app.style.transformOrigin = '';
+    app.classList.remove('swipe-card');
+  }, 970);
 }
 
 function renderSessionSummary(){
   const bumps = wizard.lastBumps || [];
   const session = wizard.lastSession;
+  const durationText = session ? fmtDuration(session.durationMs) : null;
   topbar('Session complete', null);
   const hero = document.createElement('div');
   hero.className='hero-mini px';
-  hero.innerHTML = `<div class="eyebrow neutral">Saved</div><div class="t">${session ? session.planName : 'Session'}</div>
+  hero.innerHTML = `<div class="eyebrow neutral">Saved</div>
+    <div class="t" style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+      <span>${session ? session.planName : 'Session'}</span>
+      ${durationText ? `<span>${durationText}</span>` : ''}
+    </div>
     <div class="sub" style="margin-top:2px">${session ? session.exercises.length : 0} exercises logged to your Training Log.</div>`;
   app.appendChild(hero);
 
@@ -2597,15 +3046,25 @@ function renderTrainingLog(){
   state.sessions.forEach(s=>{
     const row = document.createElement('div');
     row.className = 'session-row';
+    const durationText = fmtDuration(s.durationMs);
     row.innerHTML = `<div class="head">
         <div class="dot" style="background:${s.category==='empujar'?'var(--push)':'var(--pull)'}"></div>
         <div class="n">${s.planName}</div>
-        <div class="dt">${fmtDate(s.date)}</div>
+        <div class="dt">${fmtDate(s.date)}${durationText ? ` · ${durationText}` : ''}</div>
       </div>
       <div class="body">
         ${s.exercises.map(ex=>`<div class="ex-block"><div class="en">${ex.name}</div>${ex.sets.map(st=>`<div class="setline">${st.weight}kg × ${fmtReps(st.reps)}</div>`).join('')}</div>`).join('')}
+        <button class="btn ghost small btn-press" data-delsession="${s.id}" style="width:100%;margin-top:12px;color:var(--danger)">Delete session</button>
       </div>`;
     row.querySelector('.head').addEventListener('click', ()=>{ row.classList.toggle('open'); });
+    row.querySelector('[data-delsession]').addEventListener('click', (e)=>{
+      e.stopPropagation();
+      openConfirm('Delete this logged session? This can\'t be undone.', ()=>{
+        state.sessions = state.sessions.filter(sess=>sess.id!==s.id);
+        saveState();
+        render();
+      }, 'Delete');
+    });
     scrollArea.appendChild(row);
   });
 
@@ -2683,7 +3142,7 @@ function renderProgressList(){
     const row = document.createElement('div');
     row.className='progress-item';
     row.innerHTML = `<div class="n">${ex.name}</div>${deltaHTML}`;
-    row.addEventListener('click', ()=>push('progressDetail',{exerciseId:exId}));
+    row.addEventListener('click', ()=>pushSwipe('progressDetail',{exerciseId:exId}));
     return row;
   };
 
@@ -2738,21 +3197,29 @@ function renderProgressDetail({exerciseId}){
     const fw = first.sets[first.sets.length-1].weight;
     const lw = last.sets[last.sets.length-1].weight;
     const note = document.createElement('div');
-    note.className='banner';
-    note.innerHTML = `<div><div class="t">${fw}kg → ${lw}kg</div><div class="s">Since ${fmtDate(history[history.length-1].date)}</div></div>`;
+    note.className='px';
+    note.style.textAlign = 'center';
+    note.style.marginTop = '26vh';
+    note.innerHTML = `
+      <div style="font-family:'Anton',sans-serif;font-size:40px;line-height:1;color:var(--text);">
+        <span id="pdFrom" style="opacity:0;">${fw} kg</span>
+        <span id="pdArrow" style="opacity:0;"> → </span>
+        <span id="pdTo" style="opacity:0;">${lw} kg</span>
+      </div>
+      <div class="sub" id="pdSessions" style="margin-top:8px;opacity:0;">${history.length} sessions since ${fmtDate(history[history.length-1].date)}</div>`;
     app.appendChild(note);
+    requestAnimationFrame(()=>{
+      const fromEl = document.getElementById('pdFrom');
+      const arrowEl = document.getElementById('pdArrow');
+      const toEl = document.getElementById('pdTo');
+      const sessEl = document.getElementById('pdSessions');
+      [fromEl, arrowEl, toEl, sessEl].forEach(el=>{ if(el) el.style.transition = 'opacity .6s ease'; });
+      setTimeout(()=>{ if(fromEl) fromEl.style.opacity = '1'; }, 800);
+      setTimeout(()=>{ if(arrowEl) arrowEl.style.opacity = '1'; }, 1300);
+      setTimeout(()=>{ if(toEl) toEl.style.opacity = '1'; }, 1800);
+      setTimeout(()=>{ if(sessEl) sessEl.style.opacity = '1'; }, 2400);
+    });
   }
-
-  const wrap = document.createElement('div');
-  wrap.className='px';
-  wrap.style.marginTop='10px';
-  history.forEach(h=>{
-    const row = document.createElement('div');
-    row.className='hist-row';
-    row.innerHTML = `<span class="dt">${fmtDate(h.date)}</span><span>${h.ex.sets.map(s=>`${s.weight}×${fmtReps(s.reps)}`).join('  ')}</span>`;
-    wrap.appendChild(row);
-  });
-  app.appendChild(wrap);
 }
 
 // ---------- boot ----------
