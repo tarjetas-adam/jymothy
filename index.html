@@ -1490,7 +1490,7 @@ function buildPlanAIPrompt(plan){
   if(!sessionSummary){
     return `Here is my current workout plan:\n\n${planText}`;
   }
-  return `Here is the session I just did for this plan:\n\n${sessionSummary}\n\nHere is my current plan for comparison:\n\n${planText}\n\nCompare what I actually did against the current plan. If I lifted more weight or reps than the plan specifies on any exercise, update that exercise's numbers to match my new performance — otherwise leave it as is. Give me back the full updated plan in exactly this same format (Plan: / Rest: / Exercise: setsxreps @ weightkg) so I can paste it straight back into my app.`;
+  return `Here is the session I just did for this plan:\n\n${sessionSummary}\n\nHere is my current plan for comparison:\n\n${planText}\n\nNote: my app already automatically updates an exercise's weight/reps the moment I log a heavier or higher-rep set than the plan specifies, so simple weight bumps like that are already handled — no need to suggest those. What I actually want your input on is the bigger picture: based on how this session went (and anything else you know about my training from our conversation history), is it time for any structural changes — different rep ranges, swapping an exercise, adding/removing volume, a deload, or anything else? If so, give me back the full updated plan in exactly this same format (Plan: / Rest: / Exercise: setsxreps @ weightkg) so I can paste it straight back into my app. If nothing needs to change, just say so.`;
 }
 
 function copyPlanForAI(plan, btn){
