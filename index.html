@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>JYMOTHY</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#120E0A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JYMOTHY">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -1462,8 +1469,32 @@ function buildPlanExportText(plan){
   return lines.join('\n');
 }
 
+function buildLastSessionSummaryText(plan){
+  const sessions = state.sessions.filter(s=>s.planId===plan.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  if(sessions.length===0) return null;
+  const s = sessions[0];
+  const durationText = fmtDuration(s.durationMs);
+  const lines = [`Date: ${fmtDate(s.date)}`];
+  if(durationText) lines.push(`Duration: ${durationText}`);
+  lines.push('What I actually did:');
+  s.exercises.forEach(ex=>{
+    const setsText = ex.sets.map(st=>`${st.weight}kg x ${fmtReps(st.reps)}`).join(', ');
+    lines.push(`${ex.name}: ${setsText}`);
+  });
+  return lines.join('\n');
+}
+
+function buildPlanAIPrompt(plan){
+  const sessionSummary = buildLastSessionSummaryText(plan);
+  const planText = buildPlanExportText(plan);
+  if(!sessionSummary){
+    return `Here is my current workout plan:\n\n${planText}`;
+  }
+  return `Here is the session I just did for this plan:\n\n${sessionSummary}\n\nHere is my current plan for comparison:\n\n${planText}\n\nCompare what I actually did against the current plan. If I lifted more weight or reps than the plan specifies on any exercise, update that exercise's numbers to match my new performance — otherwise leave it as is. Give me back the full updated plan in exactly this same format (Plan: / Rest: / Exercise: setsxreps @ weightkg) so I can paste it straight back into my app.`;
+}
+
 function copyPlanForAI(plan, btn){
-  const text = buildPlanExportText(plan);
+  const text = buildPlanAIPrompt(plan);
   const originalHTML = btn.innerHTML;
   const showCopied = ()=>{
     btn.innerHTML = '<span style="font-size:18px;">✓</span>';
@@ -3228,6 +3259,12 @@ function renderProgressDetail({exerciseId}){
   await loadState();
   render();
 })();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('SW registration failed', err));
+  });
+}
 
 })();
 </script>
