@@ -305,6 +305,16 @@ h1.hero{
 }
 .restopt-active{border-color:var(--push) !important;background:var(--push-dim) !important;}
 .restopt-active.pull{border-color:var(--pull) !important;background:var(--pull-dim) !important;}
+.phase-clock-circle{
+  width:220px;height:220px;border-radius:50%;
+  border:3px solid var(--text);background:none;
+  display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;transition:transform .15s ease, opacity .15s ease;
+}
+.phase-clock-circle:active{transform:scale(.97);opacity:.85;}
+.phase-clock-circle span{
+  font-family:'Anton',sans-serif;font-size:52px;line-height:1;color:var(--text);
+}
 .rest-clock{
   display:inline-flex;align-items:center;justify-content:center;
   width:32px;height:32px;border-radius:50%;border:2px solid var(--text);
@@ -497,6 +507,7 @@ h1.hero{
   animation:modalSheetIn 1s cubic-bezier(.16,1,.3,1) both;
 }
 .modal-card-smooth{animation:modalSheetIn 1.1s cubic-bezier(.22,.9,.25,1) both;}
+.modal-card-slow{animation:modalSheetIn 2s cubic-bezier(.22,.9,.25,1) both;}
 .overview-paper{
   margin:6px 6px calc(8px + var(--safe-bottom)) 6px;
   min-height:calc(100vh - var(--safe-top) - 78px);
@@ -543,8 +554,9 @@ h1.hero{
   padding:0 20px;
 }
 .session-ex-block.open .sx-setlist{grid-template-rows:1fr;padding:0 20px 16px 20px;}
-.sx-setlist-inner{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:6px;pointer-events:none;}
-.sx-setrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(28,20,13,.3);}
+.sx-setlist-inner{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:6px;}
+.sx-setrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(28,20,13,.3);cursor:pointer;transition:opacity .15s ease;}
+.sx-setrow:active{opacity:.6;}
 .sx-setrow:first-child{border-top:none;padding-top:0;}
 .sx-setcheck{
   width:18px;height:18px;border-radius:6px;border:1.5px solid var(--text-faint);
@@ -615,26 +627,41 @@ let justLoggedKey = null;
 let revealDelayKey = null;
 let newSetIndex = null;
 let planOpenExIds = new Set();
+let overviewOpenExIds = new Set();
 let newPlanExIds = [];
 let justToggledExId = null;
 let pendingScrollRestore = null;
 let improvedSetKey = null;
 let dotsFillAnimateFrom = null;
-let restTimerInterval = null;
+let restTimerRAF = null;
 let restTimerEndTime = null;
 let restTimerExId = null;
+let restTimerLastShown = null;
+let phaseTimerRAF = null;
+let phaseTimerEndTime = null;
+let phaseTimerStarted = false;
+let phaseTimerLastShown = null;
+let sessionRunnerPendingTimeouts = [];
+function flushSessionRunnerTimeouts(){
+  sessionRunnerPendingTimeouts.forEach(tid=>clearTimeout(tid));
+  sessionRunnerPendingTimeouts = [];
+  revealDelayKey = null;
+}
 function tickRestClock(){
-  const el = document.getElementById('restClockNum');
-  if(!el || !restTimerEndTime){
-    if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
+  if(!restTimerEndTime){
+    restTimerRAF = null;
     return;
   }
-  if(el.dataset.exid !== restTimerExId) return;
+  const el = document.getElementById('restClockNum');
+  const elMatches = el && el.dataset.exid === restTimerExId;
   const remain = Math.max(0, Math.ceil((restTimerEndTime - Date.now())/1000));
-  el.textContent = remain;
+  if(elMatches && remain !== restTimerLastShown){
+    el.textContent = remain;
+    restTimerLastShown = remain;
+  }
   if(remain <= 0){
     playGong();
-    if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
+    restTimerRAF = null;
     restTimerEndTime = null;
     const finishedExId = restTimerExId;
     const activeS = state.activeSession;
@@ -653,11 +680,37 @@ function tickRestClock(){
         el3.style.opacity = '1';
       }, 1500);
     }, 3000);
+    return;
   }
+  restTimerRAF = requestAnimationFrame(tickRestClock);
 }
+function startRestTimer(exId, seconds){
+  restTimerExId = exId;
+  restTimerEndTime = Date.now() + seconds*1000;
+  restTimerLastShown = null;
+  if(restTimerRAF) cancelAnimationFrame(restTimerRAF);
+  restTimerRAF = requestAnimationFrame(tickRestClock);
+}
+function stopRestTimer(){
+  if(restTimerRAF) cancelAnimationFrame(restTimerRAF);
+  restTimerRAF = null;
+  restTimerEndTime = null;
+  restTimerExId = null;
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && restTimerEndTime && !restTimerRAF){
+    restTimerLastShown = null;
+    restTimerRAF = requestAnimationFrame(tickRestClock);
+  }
+});
+function hasExerciseHistory(exId){
+  return state.sessions.some(sess=>sess.exercises.some(e=>e.exerciseId===exId));
+}
+
 function checkImprovement(exId, i, exState){
   const s = state.activeSession;
   if(!s || !s.originalBaselines) return;
+  if(!hasExerciseHistory(exId)) return;
   const origSets = s.originalBaselines[exId] || [];
   const orig = origSets[i];
   const cur = exState.sets[i];
@@ -665,6 +718,40 @@ function checkImprovement(exId, i, exState){
   const cmp = compareSets(orig, cur);
   if(cmp && cmp.type!=='flat' && cmp.type!=='weightDown'){
     improvedSetKey = `${exId}:${i}`;
+  }
+}
+
+function toggleSetDone(exId, i, exState){
+  const totalSetsForBar = exState.sets.length;
+  const doneBefore = exState.sets.filter(x=>x.done).length;
+  dotsFillAnimateFrom = totalSetsForBar>0 ? Math.round((doneBefore/totalSetsForBar)*100) : 0;
+  exState.sets[i].done = !exState.sets[i].done;
+  let improved = false;
+  if(exState.sets[i].done){
+    checkImprovement(exId, i, exState);
+    improved = improvedSetKey === `${exId}:${i}`;
+  }
+  justLoggedKey = `${exId}:${i}`;
+  revealDelayKey = `${exId}:${i}`;
+  editRow = null;
+  if(!exState.sets[i].done){
+    playBeep(500, 80, 0.14);
+    setTimeout(()=>playBeep(320, 110, 0.12), 60);
+  } else if(improved){
+    playBeep(700, 130, 0.18);
+    setTimeout(()=>playBeep(950, 130, 0.18), 220);
+    setTimeout(()=>playBeep(1300, 180, 0.2), 440);
+  } else {
+    playBeep(880, 90, 0.18);
+    setTimeout(()=>playBeep(1320, 140, 0.16), 70);
+  }
+  if(exState.sets[i].done){
+    const s = state.activeSession;
+    const planForTimer = s ? state.plans.find(p=>p.id===s.planId) : null;
+    const restSecs = planForTimer ? planForTimer.restSeconds : 0;
+    if(restSecs && !restTimerEndTime){
+      startRestTimer(exId, restSecs);
+    }
   }
 }
 
@@ -935,6 +1022,29 @@ function pop(){
     app.classList.remove('swipe-card');
   }, 970);
 }
+function popVertical(direction){
+  const oldLayer = document.createElement('div');
+  oldLayer.className = 'expand-old-layer';
+  const oldInner = app.cloneNode(true);
+  oldLayer.appendChild(oldInner);
+  document.body.appendChild(oldLayer);
+
+  if(nav.length>1) nav.pop();
+  render();
+  window.scrollTo(0,0);
+
+  oldLayer.style.transition = 'none';
+  oldLayer.style.transform = direction==='left' ? 'translateX(0)' : 'translateY(0)';
+  oldLayer.style.opacity = '1';
+  oldLayer.offsetHeight;
+  oldLayer.style.transition = 'transform .6s cubic-bezier(.4,0,.2,1), opacity 2.8s ease';
+  if(direction==='left') oldLayer.style.transform = 'translateX(-100%)';
+  else oldLayer.style.transform = direction==='up' ? 'translateY(-100%)' : 'translateY(100%)';
+  oldLayer.style.opacity = '0';
+  setTimeout(()=>{
+    if(oldLayer.parentNode) document.body.removeChild(oldLayer);
+  }, 2820);
+}
 function replace(screen, params){ nav[nav.length-1] = {screen,params:params||{}}; render(); window.scrollTo(0,0); }
 function toHome(){
   nav=[{screen:"home"}];
@@ -1122,6 +1232,19 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
 
 // ---------- app shell ----------
 const app = document.getElementById('app');
+function adjustFixedBottomForViewport(){
+  if(!window.visualViewport) return;
+  const vv = window.visualViewport;
+  const offset = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+  document.querySelectorAll('.bottombar').forEach(el=>{
+    el.style.bottom = offset + 'px';
+  });
+}
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize', adjustFixedBottomForViewport);
+  window.visualViewport.addEventListener('scroll', adjustFixedBottomForViewport);
+}
+
 function render(){
   const {screen, params} = current();
   const renderers = {
@@ -1135,6 +1258,8 @@ function render(){
     sessionPick: renderSessionPick,
     sessionRunner: renderSessionRunner,
     sessionOverview: renderSessionOverview,
+    sessionWarmup: ()=>renderSessionPhase('warmup'),
+    sessionStretch: ()=>renderSessionPhase('stretch'),
     sessionSummary: renderSessionSummary,
     trainingLog: renderTrainingLog,
     progressList: renderProgressList,
@@ -1144,12 +1269,13 @@ function render(){
   document.body.classList.toggle('training-mode', !!inTraining);
   document.body.classList.toggle('cat-push', !!inTraining && state.activeSession.category==='empujar');
   document.body.classList.toggle('cat-pull', !!inTraining && state.activeSession.category==='tirar');
-  const sessionScreens = ['sessionRunner','sessionOverview'];
+  const sessionScreens = ['sessionRunner','sessionOverview','sessionWarmup','sessionStretch'];
   const isSessionTheme = sessionScreens.includes(screen) && !!state.activeSession;
   document.body.classList.toggle('session-theme', isSessionTheme);
   document.documentElement.classList.toggle('session-theme', isSessionTheme);
   app.innerHTML = "";
   (renderers[screen]||renderHome)(params||{});
+  requestAnimationFrame(adjustFixedBottomForViewport);
 }
 function topbar(title, onBack, rightHTML, rightId, rightHandler){
   const bar = document.createElement('div');
@@ -1531,13 +1657,42 @@ function copyPlanForAI(plan, btn){
   }
 }
 
+function openWarmupSettingModal(plan){
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay modal-center';
+  const pullCls = plan.category==='tirar' ? 'pull' : '';
+  const options = [0,300,600];
+  const optLabel = sec=>sec===0?'Off':`${Math.round(sec/60)} min`;
+  const cur = plan.warmupSeconds===undefined ? 300 : plan.warmupSeconds;
+  overlay.innerHTML = `
+    <div class="modal-card modal-card-slow" style="position:relative">
+      <div class="field-label">Warm-up & stretch time</div>
+      <div style="display:flex;gap:8px">
+        ${options.map(sec=>`<button class="btn ghost small no-press-anim ${pullCls} ${cur===sec?'restopt-active':''}" data-phaseopt="${sec}" style="flex:1;width:auto;transition:background .18s ease, border-color .18s ease;">${optLabel(sec)}</button>`).join('')}
+      </div>
+      <button class="btn primary ${pullCls} btn-press" id="warmupDoneBtn" style="margin-top:20px;">Done</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#warmupDoneBtn').addEventListener('click', ()=>{ document.body.removeChild(overlay); render(); });
+  overlay.querySelectorAll('[data-phaseopt]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const val = parseInt(btn.dataset.phaseopt,10);
+      plan.warmupSeconds = val;
+      plan.stretchSeconds = val;
+      saveState();
+      overlay.querySelectorAll('[data-phaseopt]').forEach(b=>b.classList.remove('restopt-active'));
+      btn.classList.add('restopt-active');
+    });
+  });
+}
+
 function openRestSettingModal(plan){
   const overlay = document.createElement('div');
   overlay.className='modal-overlay modal-center';
   const pullCls = plan.category==='tirar' ? 'pull' : '';
   const options = [60,90,120];
   overlay.innerHTML = `
-    <div class="modal-card modal-card-smooth" style="position:relative">
+    <div class="modal-card modal-card-slow" style="position:relative">
       <button class="iconbtn btn-press" id="closeRestBtn" style="position:absolute;top:10px;right:10px;font-size:15px">✕</button>
       <div class="field-label" style="margin-bottom:14px">How much rest do you want between sets?</div>
       <div style="display:flex;flex-direction:column;gap:10px">
@@ -1773,19 +1928,28 @@ function renderPlanDetail({planId}){
   const cat = plan.category==='empujar' ? 'push' : 'pull';
   const hero = document.createElement('div');
   hero.className='hero-mini px';
-  hero.style.display = 'flex';
-  hero.style.alignItems = 'flex-start';
-  hero.style.justifyContent = 'space-between';
-  hero.innerHTML = `<div><div class="eyebrow ${cat}">${catLabel(plan.category)}</div><div class="t" id="planNameTap" style="cursor:pointer">${plan.name} <span style="font-size:16px;color:var(--text-faint);vertical-align:middle">✎</span></div></div>
-    <button class="btn ghost small btn-press" id="restSettingBtn" style="width:auto;flex-shrink:0;margin-left:12px;margin-top:19px;">Rest${plan.restSeconds?` · ${plan.restSeconds}s`:''}</button>`;
+  hero.innerHTML = `<div class="eyebrow ${cat}">${catLabel(plan.category)}</div><div class="t" id="planNameTap" style="cursor:pointer">${plan.name} <span style="font-size:16px;color:var(--text-faint);vertical-align:middle">✎</span></div>`;
   app.appendChild(hero);
   hero.querySelector('#planNameTap').addEventListener('click', ()=>openRenamePlanModal(plan));
-  hero.querySelector('#restSettingBtn').addEventListener('click', ()=>openRestSettingModal(plan));
 
   [...planOpenExIds].forEach(id=>{ if(!plan.exerciseIds.includes(id)) planOpenExIds.delete(id); });
 
   const paper = document.createElement('div');
   paper.className = 'overview-paper paper-plain';
+
+  const settingsRow = document.createElement('div');
+  settingsRow.style.display = 'flex';
+  settingsRow.style.gap = '8px';
+  settingsRow.style.margin = '4px 0 30px 0';
+  const curPhaseMin = Math.round((plan.warmupSeconds===undefined?300:plan.warmupSeconds)/60);
+  const warmupLabel = curPhaseMin===0 ? '' : ` · ${curPhaseMin}min`;
+  settingsRow.innerHTML = `
+    <button class="btn ghost small btn-press" id="warmupSettingBtn" style="flex:1;width:auto;">Warm-up &amp; Stretch${warmupLabel}</button>
+    <button class="btn ghost small btn-press" id="restSettingBtn" style="flex:1;width:auto;">Rest${plan.restSeconds?` · ${plan.restSeconds}s`:''}</button>`;
+  paper.appendChild(settingsRow);
+  settingsRow.querySelector('#restSettingBtn').addEventListener('click', ()=>{ setTimeout(()=>openRestSettingModal(plan), 250); });
+  settingsRow.querySelector('#warmupSettingBtn').addEventListener('click', ()=>{ setTimeout(()=>openWarmupSettingModal(plan), 250); });
+
   const list = document.createElement('div');
   list.id='reorderList';
   plan.exerciseIds.forEach(exId=>{
@@ -2367,6 +2531,93 @@ function showKickoff(plan){
   }, 2100);
 }
 
+function fmtMMSS(totalSeconds){
+  const m = Math.floor(totalSeconds/60);
+  const sec = totalSeconds%60;
+  return `${m}:${sec<10?'0':''}${sec}`;
+}
+
+function tickPhaseClock(){
+  const el = document.getElementById('phaseClockText');
+  if(!el || !phaseTimerEndTime){ phaseTimerRAF = null; return; }
+  const remain = Math.max(0, Math.ceil((phaseTimerEndTime - Date.now())/1000));
+  if(remain !== phaseTimerLastShown){
+    el.textContent = fmtMMSS(remain);
+    phaseTimerLastShown = remain;
+  }
+  if(remain<=0){
+    playGong();
+    phaseTimerRAF = null;
+    phaseTimerEndTime = null;
+    phaseTimerStarted = false;
+    advancePastPhase();
+    return;
+  }
+  phaseTimerRAF = requestAnimationFrame(tickPhaseClock);
+}
+
+function advancePastPhase(){
+  const {screen} = current();
+  if(screen==='sessionWarmup'){ replace('sessionRunner'); window.scrollTo(0,0); }
+  else if(screen==='sessionStretch'){ finishSession(); }
+}
+
+function renderSessionPhase(phaseType){
+  const s = state.activeSession;
+  if(!s){ toHome(); return; }
+  const plan = state.plans.find(p=>p.id===s.planId);
+  const durationField = phaseType==='warmup' ? 'warmupSeconds' : 'stretchSeconds';
+  const duration = plan && plan[durationField]!==undefined ? plan[durationField] : 300;
+  const title = phaseType==='warmup' ? 'Warm-up' : 'Stretch';
+  const cls = s.category==='empujar' ? 'push' : 'pull';
+  const alreadyRunning = !!(phaseTimerRAF && phaseTimerEndTime);
+  let displaySeconds = duration;
+  if(alreadyRunning){
+    displaySeconds = Math.max(0, Math.ceil((phaseTimerEndTime - Date.now())/1000));
+  }
+
+  topbar(title, null);
+  const wrap = document.createElement('div');
+  wrap.style.textAlign = 'center';
+  wrap.style.marginTop = '26vh';
+  wrap.innerHTML = `
+    <div class="eyebrow ${cls}" style="margin-bottom:16px;">${title.toUpperCase()}</div>
+    <button id="phaseClockCircle" class="phase-clock-circle ${cls}">
+      <span id="phaseClockText">${fmtMMSS(displaySeconds)}</span>
+    </button>`;
+  app.appendChild(wrap);
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'px';
+  btnRow.style.marginTop = '30px';
+  btnRow.innerHTML = `<button class="btn ghost btn-press" id="phaseSkipBtn" style="max-width:280px;margin:0 auto;display:block;opacity:0;transition:opacity 1.8s ease, background 1.1s ease, color 1.1s ease, transform 1.1s ease;">Skip</button>`;
+  app.appendChild(btnRow);
+  const skipBtn = btnRow.querySelector('#phaseSkipBtn');
+
+  if(alreadyRunning){
+    setTimeout(()=>{ skipBtn.style.opacity = '1'; }, 30);
+  }
+
+  const circleBtn = wrap.querySelector('#phaseClockCircle');
+  circleBtn.addEventListener('click', ()=>{
+    if(phaseTimerRAF && phaseTimerEndTime) return;
+    phaseTimerEndTime = Date.now() + duration*1000;
+    phaseTimerLastShown = null;
+    phaseTimerStarted = true;
+    if(phaseTimerRAF) cancelAnimationFrame(phaseTimerRAF);
+    phaseTimerRAF = requestAnimationFrame(tickPhaseClock);
+    setTimeout(()=>{ skipBtn.style.opacity = '1'; }, 2000);
+  });
+
+  skipBtn.addEventListener('click', ()=>{
+    setTimeout(()=>{
+      if(phaseTimerRAF) cancelAnimationFrame(phaseTimerRAF);
+      phaseTimerRAF = null; phaseTimerEndTime = null; phaseTimerStarted = false;
+      advancePastPhase();
+    }, 800);
+  });
+}
+
 function startSession(plan){
   if(plan.exerciseIds.length===0){ openAlert('This plan has no exercises yet.'); return; }
   const exercisesState = {};
@@ -2385,10 +2636,12 @@ function startSession(plan){
     originalBaselines,
   };
   saveState();
-  if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
-  restTimerEndTime = null; restTimerExId = null;
+  stopRestTimer();
+  if(phaseTimerRAF){ cancelAnimationFrame(phaseTimerRAF); phaseTimerRAF = null; }
+  phaseTimerEndTime = null; phaseTimerStarted = false;
   editRow = null; editRowExId = null; lastShownExId = null; justLoggedKey = null; revealDelayKey = null; newSetIndex = null;
-  nav = [{screen:'home'},{screen:'sessionRunner'}];
+  const warmupSecs = plan.warmupSeconds===undefined ? 300 : plan.warmupSeconds;
+  nav = [{screen:'home'},{screen: warmupSecs>0 ? 'sessionWarmup' : 'sessionRunner'}];
   render();
   window.scrollTo(0,0);
   app.style.transition = 'none';
@@ -2486,16 +2739,23 @@ function renderSessionRunner(){
     if(!complete){
       render();
       if(revealDelayKey){
-        setTimeout(()=>{ revealDelayKey = null; render(); }, 1300);
+        const tid = setTimeout(()=>{ revealDelayKey = null; render(); }, 1300);
+        sessionRunnerPendingTimeouts.push(tid);
       }
       return;
     }
     const delay = justLoggedKey ? 1500 : 0;
     render();
-    setTimeout(()=>{
+    const tid = setTimeout(()=>{
       if(s.currentIndex < total-1){ s.currentIndex++; saveState(); render(); window.scrollTo(0,0); }
-      else { finishSession(); }
+      else {
+        const planForFinish = state.plans.find(p=>p.id===s.planId);
+        const stretchSecs = planForFinish ? (planForFinish.stretchSeconds===undefined?300:planForFinish.stretchSeconds) : 0;
+        if(stretchSecs>0) pushSwipe('sessionStretch');
+        else finishSession();
+      }
     }, delay);
+    sessionRunnerPendingTimeouts.push(tid);
   }
 
   let blocked = false;
@@ -2663,38 +2923,10 @@ function renderSessionRunner(){
       doDelete();
     }
   }));
+
   list.querySelectorAll('.logcheck').forEach(btn=>btn.addEventListener('click',()=>{
     const i=btn.dataset.i;
-    const totalSetsForBar = exState.sets.length;
-    const doneBefore = exState.sets.filter(x=>x.done).length;
-    dotsFillAnimateFrom = totalSetsForBar>0 ? Math.round((doneBefore/totalSetsForBar)*100) : 0;
-    exState.sets[i].done = !exState.sets[i].done;
-    let improved = false;
-    if(exState.sets[i].done){
-      checkImprovement(exId, i, exState);
-      improved = improvedSetKey === `${exId}:${i}`;
-    }
-    justLoggedKey = `${exId}:${i}`;
-    revealDelayKey = `${exId}:${i}`;
-    editRow = null;
-    if(improved){
-      playBeep(700, 130, 0.18);
-      setTimeout(()=>playBeep(950, 130, 0.18), 220);
-      setTimeout(()=>playBeep(1300, 180, 0.2), 440);
-    } else {
-      playBeep(880, 90, 0.18);
-      setTimeout(()=>playBeep(1320, 140, 0.16), 70);
-    }
-    if(exState.sets[i].done){
-      const planForTimer = state.plans.find(p=>p.id===s.planId);
-      const restSecs = planForTimer ? planForTimer.restSeconds : 0;
-      if(restSecs){
-        restTimerExId = exId;
-        restTimerEndTime = Date.now() + restSecs*1000;
-        if(restTimerInterval) clearInterval(restTimerInterval);
-        restTimerInterval = setInterval(tickRestClock, 1000);
-      }
-    }
+    toggleSetDone(exId, i, exState);
     maybeAdvance();
   }));
 
@@ -2721,7 +2953,7 @@ function renderSessionRunner(){
       <button class="btn ghost small btn-press" id="finishBtn">End session</button>
     </div>`;
   app.appendChild(bottomBar);
-  bottomBar.querySelector('#zoomBtn').addEventListener('click', (e)=>pushExpand('sessionOverview', e.currentTarget));
+  bottomBar.querySelector('#zoomBtn').addEventListener('click', (e)=>{ flushSessionRunnerTimeouts(); pushExpand('sessionOverview', e.currentTarget); });
   bottomBar.querySelector('#finishBtn').addEventListener('click', ()=>{
     openConfirm('Are you sure you want to end the session?', finishSession, 'End session');
   });
@@ -2877,7 +3109,7 @@ function openNumpad(initial, title, allowDecimal, onConfirm){
 function renderSessionOverview(){
   const s = state.activeSession;
   if(!s){ toHome(); return; }
-  topbar('Overview', pop);
+  topbar('Overview', ()=>popVertical('left'));
 
   const paper = document.createElement('div');
   paper.className = 'overview-paper';
@@ -2886,7 +3118,7 @@ function renderSessionOverview(){
   hero.className='hero-mini';
   hero.style.padding = '18px 20px 8px 20px';
   hero.innerHTML = `<div class="t">${s.planName}</div>
-    <div class="sub" style="margin-top:2px">Tap to open. Hold to reorder.</div>`;
+    <div class="sub" style="margin-top:2px">Tap a name to open it. Tap a set to log it. Hold to reorder.</div>`;
   paper.appendChild(hero);
 
   const list = document.createElement('div');
@@ -2895,8 +3127,9 @@ function renderSessionOverview(){
   s.exerciseOrder.forEach((id,i)=>{
     const ex = getEx(id);
     const st = s.exercisesState[id];
+    const isOpen = overviewOpenExIds.has(id);
     const block = document.createElement('div');
-    block.className = `session-ex-block${i===s.currentIndex?' current':''}`;
+    block.className = `session-ex-block${i===s.currentIndex?' current':''}${isOpen?' open':''}`;
     block.dataset.id = id;
     block.innerHTML = `
       <div class="sx-head">
@@ -2905,8 +3138,8 @@ function renderSessionOverview(){
       </div>
       <div class="sx-setlist">
         <div class="sx-setlist-inner">
-          ${st.sets.map(set=>`
-            <div class="sx-setrow">
+          ${st.sets.map((set,si)=>`
+            <div class="sx-setrow nodrag" data-exid="${id}" data-si="${si}">
               <span class="sx-setcheck${set.done?' done '+cls:''}">${set.done?'✓':''}</span>
               <span class="sx-settext">${set.weight}kg × ${fmtReps(set.reps)}</span>
             </div>`).join('')}
@@ -2917,18 +3150,53 @@ function renderSessionOverview(){
   paper.appendChild(list);
   app.appendChild(paper);
 
+  list.querySelectorAll('.sx-setrow').forEach(row=>{
+    row.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const exId = row.dataset.exid;
+      const si = row.dataset.si;
+      const exState = s.exercisesState[exId];
+      if(!exState) return;
+      if(exState.sets[si].done) return;
+      toggleSetDone(exId, si, exState);
+      saveState();
+      const set = exState.sets[si];
+      const checkEl = row.querySelector('.sx-setcheck');
+      if(checkEl){
+        checkEl.classList.toggle('done', set.done);
+        checkEl.classList.toggle(cls, set.done);
+        checkEl.textContent = set.done ? '✓' : '';
+      }
+    });
+  });
+
   makeReorderable(list, '.session-ex-block', {
     onReorder:(ids)=>{ s.exerciseOrder = ids; saveState(); },
     onTap:(id)=>{
       const el = list.querySelector(`.session-ex-block[data-id="${id}"]`);
-      if(el) el.classList.toggle('open');
+      if(!el) return;
+      if(overviewOpenExIds.has(id)) overviewOpenExIds.delete(id);
+      else overviewOpenExIds.add(id);
+      el.classList.toggle('open');
     },
+  });
+
+  let swipeStartY = null;
+  paper.addEventListener('pointerdown', (e)=>{ swipeStartY = e.clientY; });
+  paper.addEventListener('pointerup', (e)=>{
+    if(swipeStartY===null) return;
+    const dy = e.clientY - swipeStartY;
+    swipeStartY = null;
+    if(dy < -70) popVertical('up');
+    else if(dy > 70) popVertical('down');
   });
 }
 
 function finishSession(){
-  if(restTimerInterval){ clearInterval(restTimerInterval); restTimerInterval = null; }
-  restTimerEndTime = null; restTimerExId = null;
+  flushSessionRunnerTimeouts();
+  stopRestTimer();
+  if(phaseTimerRAF){ cancelAnimationFrame(phaseTimerRAF); phaseTimerRAF = null; }
+  phaseTimerEndTime = null; phaseTimerStarted = false;
   const s = state.activeSession;
   const plan = state.plans.find(p=>p.id===s.planId);
   const loggedExercises = [];
@@ -2947,13 +3215,14 @@ function finishSession(){
     // logged value as the new baseline going forward. Sets that weren't
     // logged, or weren't an improvement, keep their original value.
     const origSets = origBaselines[exId] || [];
+    const isFirstTime = !hasExerciseHistory(exId);
     let exerciseBumped = false;
     const newBaseline = st.sets.map((cur,i)=>{
       const orig = origSets[i];
       if(!cur.done || !orig) return orig ? {weight:orig.weight, reps:orig.reps} : {weight:cur.weight, reps:cur.reps};
       const cmp = compareSets(orig, cur);
       if(cmp && cmp.type!=='flat' && cmp.type!=='weightDown'){
-        if(!exerciseBumped){
+        if(!exerciseBumped && !isFirstTime){
           exerciseBumped = true;
           if(cmp.type==='weight'){
             bumps.push({exerciseId:exId, name:ex.name, from:cmp.from, to:cmp.to});
@@ -3128,6 +3397,16 @@ function renderProgressList(){
 
   const exIds = new Set();
   state.sessions.forEach(s=>s.exercises.forEach(ex=>exIds.add(ex.exerciseId)));
+  exIds.forEach(exId=>{
+    const sessHistory = state.sessions.filter(s=>s.exercises.some(e=>e.exerciseId===exId))
+      .map(s=>({date:s.date, ex:s.exercises.find(e=>e.exerciseId===exId)}))
+      .sort((a,b)=>new Date(a.date)-new Date(b.date));
+    if(sessHistory.length<2){ exIds.delete(exId); return; }
+    const firstSet = sessHistory[0].ex.sets[sessHistory[0].ex.sets.length-1];
+    const lastSet = sessHistory[sessHistory.length-1].ex.sets[sessHistory[sessHistory.length-1].ex.sets.length-1];
+    const cmp = compareSets(firstSet, lastSet);
+    if(!cmp || cmp.type==='flat' || cmp.type==='weightDown') exIds.delete(exId);
+  });
   if(exIds.size===0){
     const e = document.createElement('div');
     e.className='empty';
