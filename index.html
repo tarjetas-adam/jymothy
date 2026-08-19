@@ -3188,15 +3188,6 @@ function renderSessionOverview(){
     },
   });
 
-  let swipeStartY = null;
-  paper.addEventListener('pointerdown', (e)=>{ swipeStartY = e.clientY; });
-  paper.addEventListener('pointerup', (e)=>{
-    if(swipeStartY===null) return;
-    const dy = e.clientY - swipeStartY;
-    swipeStartY = null;
-    if(dy < -70) popVertical('up');
-    else if(dy > 70) popVertical('down');
-  });
 }
 
 function finishSession(){
@@ -3540,6 +3531,27 @@ function renderProgressDetail({exerciseId}){
 }
 
 // ---------- boot ----------
+let overviewSwipeStartY = null;
+let overviewSwipeStartX = null;
+document.addEventListener('touchstart', (e)=>{
+  if(current().screen !== 'sessionOverview') return;
+  if(e.touches.length!==1) return;
+  overviewSwipeStartY = e.touches[0].clientY;
+  overviewSwipeStartX = e.touches[0].clientX;
+}, {passive:true});
+document.addEventListener('touchend', (e)=>{
+  if(overviewSwipeStartY===null) return;
+  if(current().screen !== 'sessionOverview'){ overviewSwipeStartY=null; overviewSwipeStartX=null; return; }
+  const touch = e.changedTouches[0];
+  if(!touch){ overviewSwipeStartY=null; overviewSwipeStartX=null; return; }
+  const dy = touch.clientY - overviewSwipeStartY;
+  const dx = touch.clientX - overviewSwipeStartX;
+  overviewSwipeStartY = null; overviewSwipeStartX = null;
+  if(Math.abs(dx) > Math.abs(dy)) return;
+  if(dy < -70) popVertical('up');
+  else if(dy > 70) popVertical('down');
+}, {passive:true});
+
 (async function boot(){
   app.innerHTML = `<div class="centered-note">Loading JYMOTHY…</div>`;
   await loadState();
