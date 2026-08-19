@@ -3533,20 +3533,36 @@ function renderProgressDetail({exerciseId}){
 // ---------- boot ----------
 let overviewSwipeStartY = null;
 let overviewSwipeStartX = null;
+let overviewSwipeClaimed = false;
 document.addEventListener('touchstart', (e)=>{
   if(current().screen !== 'sessionOverview') return;
   if(e.touches.length!==1) return;
   overviewSwipeStartY = e.touches[0].clientY;
   overviewSwipeStartX = e.touches[0].clientX;
+  overviewSwipeClaimed = false;
 }, {passive:true});
-document.addEventListener('touchend', (e)=>{
+document.addEventListener('touchmove', (e)=>{
   if(overviewSwipeStartY===null) return;
-  if(current().screen !== 'sessionOverview'){ overviewSwipeStartY=null; overviewSwipeStartX=null; return; }
-  const touch = e.changedTouches[0];
-  if(!touch){ overviewSwipeStartY=null; overviewSwipeStartX=null; return; }
+  if(current().screen !== 'sessionOverview') return;
+  const touch = e.touches[0];
+  if(!touch) return;
   const dy = touch.clientY - overviewSwipeStartY;
   const dx = touch.clientX - overviewSwipeStartX;
-  overviewSwipeStartY = null; overviewSwipeStartX = null;
+  if(!overviewSwipeClaimed && Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)){
+    overviewSwipeClaimed = true;
+  }
+  if(overviewSwipeClaimed) e.preventDefault();
+}, {passive:false});
+document.addEventListener('touchend', (e)=>{
+  if(overviewSwipeStartY===null) return;
+  if(current().screen !== 'sessionOverview'){ overviewSwipeStartY=null; overviewSwipeStartX=null; overviewSwipeClaimed=false; return; }
+  const touch = e.changedTouches[0];
+  if(!touch){ overviewSwipeStartY=null; overviewSwipeStartX=null; overviewSwipeClaimed=false; return; }
+  const dy = touch.clientY - overviewSwipeStartY;
+  const dx = touch.clientX - overviewSwipeStartX;
+  const claimed = overviewSwipeClaimed;
+  overviewSwipeStartY = null; overviewSwipeStartX = null; overviewSwipeClaimed = false;
+  if(!claimed) return;
   if(Math.abs(dx) > Math.abs(dy)) return;
   if(dy < -70) popVertical('up');
   else if(dy > 70) popVertical('down');
