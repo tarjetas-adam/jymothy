@@ -504,7 +504,7 @@ h1.hero{
 .modal-center{display:flex;align-items:center;justify-content:center;}
 .modal-card{
   background:var(--bg);border:1px solid var(--line);border-radius:18px;padding:22px;
-  width:88%;max-width:400px;
+  width:88%;max-width:400px;box-sizing:border-box;
   animation:modalSheetIn 1s cubic-bezier(.16,1,.3,1) both;
 }
 .modal-card-smooth{animation:modalSheetIn 1.1s cubic-bezier(.22,.9,.25,1) both;}
@@ -1619,17 +1619,13 @@ function renderPlanNewExercises(){
   addrow.className='addrow';
   addrow.style.flexShrink = '0';
   addrow.innerHTML = `<input type="text" id="newExName" placeholder="+ Add new exercise…">
-    <select id="newExCat" style="background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:0 8px;font-family:'Inter';font-size:13px;">
-      <option value="empujar">Empujar</option>
-      <option value="tirar">Tirar</option>
-    </select>
     <button class="btn ghost small" id="addExBtn">Add</button>`;
   pageWrap.appendChild(addrow);
   addrow.querySelector('#addExBtn').addEventListener('click', ()=>{
     const input = addrow.querySelector('#newExName');
-    const cat = addrow.querySelector('#newExCat').value;
     const name = input.value.trim();
     if(!name) return;
+    const cat = guessCategory(name);
     const newEx = {id:uid(), name, category:cat};
     state.library.push(newEx);
     state.baselines[newEx.id] = [{weight:20,reps:"10"},{weight:20,reps:"10"},{weight:20,reps:"10"}];
@@ -1859,10 +1855,10 @@ function openImportRoutineModal(){
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-center';
   overlay.innerHTML = `
-    <div class="modal-card" style="width:92%;max-width:520px;">
+    <div class="modal-card modal-card-slow" style="width:92%;max-width:520px;box-sizing:border-box;">
       <div class="field-label">Import a routine</div>
       <div class="sub" style="margin-bottom:12px">Already have a routine written down? Copy the prompt below, paste it into any AI along with your routine, then paste what it gives you back here.</div>
-      <pre style="background:var(--bg-2);border-radius:10px;padding:12px;font-family:'Space Mono',monospace;font-size:12px;color:var(--text-dim);white-space:pre-wrap;margin-bottom:12px;">${IMPORT_FORMAT_EXAMPLE}</pre>
+      <pre style="background:var(--bg-2);border-radius:10px;padding:12px;font-family:'Space Mono',monospace;font-size:12px;color:var(--text-dim);white-space:pre-wrap;overflow-wrap:break-word;margin-bottom:12px;box-sizing:border-box;">${IMPORT_FORMAT_EXAMPLE}</pre>
       <button class="btn ghost small btn-press" id="copyTemplateBtn" style="width:100%;margin-bottom:14px;">Copy AI prompt</button>
       <textarea id="importText" placeholder="Paste your routine here…" style="width:100%;min-height:160px;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:12px;font-family:'Space Mono',monospace;font-size:13px;box-sizing:border-box;margin-bottom:14px;"></textarea>
       <div id="importError" style="color:var(--danger);font-size:13px;margin-bottom:10px;display:none;"></div>
@@ -3582,7 +3578,11 @@ function renderProgressList(){
     } else if(cmp.type==='weightDown'){
       deltaHTML = `<div class="delta flat">${Math.round((cmp.to-cmp.from)*10)/10}kg</div>`;
     } else {
-      deltaHTML = `<div class="delta">${fmtReps(cmp.from)} → ${fmtReps(cmp.to)}</div>`;
+      const repsText = `${firstSet.weight}kg ${fmtReps(cmp.from)} → ${fmtReps(cmp.to)}`;
+      let deltaFont = 12;
+      if(repsText.length>20) deltaFont = 9;
+      else if(repsText.length>15) deltaFont = 10.5;
+      deltaHTML = `<div class="delta" style="font-size:${deltaFont}px;white-space:nowrap;">${repsText}</div>`;
     }
     const row = document.createElement('div');
     row.className='progress-item';
@@ -3639,17 +3639,24 @@ function renderProgressDetail({exerciseId}){
   if(history.length>=2){
     const first = history[history.length-1].ex;
     const last = history[0].ex;
-    const fw = first.sets[first.sets.length-1].weight;
-    const lw = last.sets[last.sets.length-1].weight;
+    const firstSet = first.sets[first.sets.length-1];
+    const lastSet = last.sets[last.sets.length-1];
+    const fromText = `${firstSet.weight}kg × ${fmtReps(firstSet.reps)}`;
+    const toText = `${lastSet.weight}kg × ${fmtReps(lastSet.reps)}`;
+    const longerLen = Math.max(fromText.length, toText.length);
+    let fontSize = 40;
+    if(longerLen>16) fontSize = 22;
+    else if(longerLen>12) fontSize = 28;
+    else if(longerLen>8) fontSize = 34;
     const note = document.createElement('div');
     note.className='px';
     note.style.textAlign = 'center';
     note.style.marginTop = '26vh';
     note.innerHTML = `
-      <div style="font-family:'Anton',sans-serif;font-size:40px;line-height:1;color:var(--text);">
-        <span id="pdFrom" style="opacity:0;">${fw} kg</span>
+      <div style="font-family:'Anton',sans-serif;font-size:${fontSize}px;line-height:1;color:var(--text);white-space:nowrap;">
+        <span id="pdFrom" style="opacity:0;">${fromText}</span>
         <span id="pdArrow" style="opacity:0;"> → </span>
-        <span id="pdTo" style="opacity:0;">${lw} kg</span>
+        <span id="pdTo" style="opacity:0;">${toText}</span>
       </div>
       <div class="sub" id="pdSessions" style="margin-top:8px;opacity:0;">${history.length} sessions since ${fmtDate(history[history.length-1].date)}</div>`;
     app.appendChild(note);
