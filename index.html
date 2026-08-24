@@ -3588,31 +3588,9 @@ function renderProgressList(){
   const buildRow = exId=>{
     const ex = getEx(exId);
     if(!ex) return null;
-    const history = state.sessions.filter(s=>s.exercises.some(e=>e.exerciseId===exId))
-      .map(s=>({date:s.date, ex:s.exercises.find(e=>e.exerciseId===exId)}))
-      .sort((a,b)=>new Date(a.date)-new Date(b.date));
-    const first = history[0];
-    const last = history[history.length-1];
-    const firstSet = first.ex.sets[first.ex.sets.length-1];
-    const lastSet = last.ex.sets[last.ex.sets.length-1];
-    const cmp = compareSets(firstSet, lastSet);
-    let deltaHTML;
-    if(!cmp || cmp.type==='flat'){
-      deltaHTML = `<div class="delta flat">–</div>`;
-    } else if(cmp.type==='weight'){
-      deltaHTML = `<div class="delta">+${Math.round((cmp.to-cmp.from)*10)/10}kg</div>`;
-    } else if(cmp.type==='weightDown'){
-      deltaHTML = `<div class="delta flat">${Math.round((cmp.to-cmp.from)*10)/10}kg</div>`;
-    } else {
-      const repsText = `${firstSet.weight}kg ${fmtReps(cmp.from)} → ${fmtReps(cmp.to)}`;
-      let deltaFont = 12;
-      if(repsText.length>20) deltaFont = 9;
-      else if(repsText.length>15) deltaFont = 10.5;
-      deltaHTML = `<div class="delta" style="font-size:${deltaFont}px;white-space:nowrap;">${repsText}</div>`;
-    }
     const row = document.createElement('div');
     row.className='progress-item';
-    row.innerHTML = `<div class="n">${ex.name}</div>${deltaHTML}`;
+    row.innerHTML = `<div class="n">${ex.name}</div>`;
     row.addEventListener('click', ()=>pushSwipe('progressDetail',{exerciseId:exId}));
     return row;
   };
@@ -3667,36 +3645,121 @@ function renderProgressDetail({exerciseId}){
     const last = history[0].ex;
     const firstSet = first.sets[first.sets.length-1];
     const lastSet = last.sets[last.sets.length-1];
-    const fromText = `${firstSet.weight}kg × ${fmtReps(firstSet.reps)}`;
-    const toText = `${lastSet.weight}kg × ${fmtReps(lastSet.reps)}`;
+    const fromParsed = parseReps(firstSet.reps);
+    const toParsed = parseReps(lastSet.reps);
+    const fromSplit = fromParsed.segments.length>1;
+    const toSplit = toParsed.segments.length>1;
+    const anySplit = fromSplit || toSplit;
+
+    const fromText = `${firstSet.weight} kg × ${fmtReps(firstSet.reps)}`;
+    const toText = `${lastSet.weight} kg × ${fmtReps(lastSet.reps)}`;
     const longerLen = Math.max(fromText.length, toText.length);
-    let fontSize = 40;
-    if(longerLen>16) fontSize = 22;
-    else if(longerLen>12) fontSize = 28;
-    else if(longerLen>8) fontSize = 34;
+    let fontSize = 52;
+    if(longerLen>16) fontSize = 30;
+    else if(longerLen>12) fontSize = 38;
+    else if(longerLen>8) fontSize = 45;
+
     const note = document.createElement('div');
     note.className='px';
     note.style.textAlign = 'center';
     note.style.marginTop = '26vh';
     note.innerHTML = `
-      <div style="font-family:'Anton',sans-serif;font-size:${fontSize}px;line-height:1;color:var(--text);white-space:nowrap;">
-        <span id="pdFrom" style="opacity:0;">${fromText}</span>
-        <span id="pdArrow" style="opacity:0;"> → </span>
-        <span id="pdTo" style="opacity:0;">${toText}</span>
+      <div id="pdRecord" style="font-family:'Anton',sans-serif;font-size:${fontSize}px;line-height:1;color:var(--text);white-space:nowrap;cursor:pointer;">
+        <span id="pdWeight" style="opacity:0;"></span>
+        <span id="pdX" style="opacity:0;">×</span>
+        <span id="pdReps1" style="opacity:0;"></span><span id="pdPlus" style="opacity:0;">${anySplit?' + ':''}</span><span id="pdReps2" style="opacity:0;"></span>
       </div>
       <div class="sub" id="pdSessions" style="margin-top:8px;opacity:0;">${history.length} sessions since ${fmtDate(history[history.length-1].date)}</div>`;
     app.appendChild(note);
-    requestAnimationFrame(()=>{
-      const fromEl = document.getElementById('pdFrom');
-      const arrowEl = document.getElementById('pdArrow');
-      const toEl = document.getElementById('pdTo');
-      const sessEl = document.getElementById('pdSessions');
-      [fromEl, arrowEl, toEl, sessEl].forEach(el=>{ if(el) el.style.transition = 'opacity .6s ease'; });
-      setTimeout(()=>{ if(fromEl) fromEl.style.opacity = '1'; }, 800);
-      setTimeout(()=>{ if(arrowEl) arrowEl.style.opacity = '1'; }, 1300);
-      setTimeout(()=>{ if(toEl) toEl.style.opacity = '1'; }, 1800);
-      setTimeout(()=>{ if(sessEl) sessEl.style.opacity = '1'; }, 2400);
+
+    const recordEl = document.getElementById('pdRecord');
+    const weightEl = document.getElementById('pdWeight');
+    const xEl = document.getElementById('pdX');
+    const reps1El = document.getElementById('pdReps1');
+    const plusEl = document.getElementById('pdPlus');
+    const reps2El = document.getElementById('pdReps2');
+    const sessEl = document.getElementById('pdSessions');
+
+    const fadeIn = (el, val)=>new Promise(resolve=>{
+      if(val!==undefined) el.textContent = val;
+      el.style.transition = 'opacity .4s ease';
+      el.style.opacity = '1';
+      setTimeout(resolve, 380);
     });
+    const fadeOut = (el)=>new Promise(resolve=>{
+      el.style.transition = 'opacity .3s ease';
+      el.style.opacity = '0';
+      setTimeout(resolve, 280);
+    });
+
+    let animationRunning = false;
+    async function playSwapAnimation(){
+      if(animationRunning) return;
+      animationRunning = true;
+
+      const currentlyVisible = weightEl.style.opacity === '1';
+      const slowFadeIn = (el, val)=>new Promise(resolve=>{
+        if(val!==undefined) el.textContent = val;
+        el.style.transition = 'opacity .9s ease';
+        el.style.opacity = '1';
+        setTimeout(resolve, 900);
+      });
+      if(currentlyVisible){
+        const slowFadeOut = (el)=>new Promise(resolve=>{
+          el.style.transition = 'opacity .9s ease';
+          el.style.opacity = '0';
+          setTimeout(resolve, 900);
+        });
+        const partsToFadeOut = [weightEl, xEl, reps1El];
+        if(plusEl.style.opacity==='1') partsToFadeOut.push(plusEl);
+        if(reps2El.style.opacity==='1') partsToFadeOut.push(reps2El);
+        await Promise.all(partsToFadeOut.map(slowFadeOut));
+        await new Promise(r=>setTimeout(r, 300));
+      }
+
+      const oldFadeInFn = currentlyVisible ? slowFadeIn : fadeIn;
+      const oldFadeIns = [
+        oldFadeInFn(weightEl, `${firstSet.weight} kg`),
+        oldFadeInFn(xEl),
+        oldFadeInFn(reps1El, String(fromParsed.segments[0])),
+      ];
+      if(fromSplit){
+        oldFadeIns.push(oldFadeInFn(plusEl), oldFadeInFn(reps2El, String(fromParsed.segments[1])));
+      } else {
+        plusEl.style.transition = 'none'; plusEl.style.opacity = '0';
+        reps2El.style.transition = 'none'; reps2El.style.opacity = '0';
+      }
+      await Promise.all(oldFadeIns);
+
+      await new Promise(r=>setTimeout(r, 1800));
+
+      const toFade = [weightEl, xEl, reps1El];
+      if(fromSplit){ toFade.push(plusEl, reps2El); }
+      await Promise.all(toFade.map(fadeOut));
+
+      await fadeIn(weightEl, `${lastSet.weight} kg`);
+      await fadeIn(xEl);
+      await fadeIn(reps1El, String(toParsed.segments[0]));
+      if(toSplit){
+        plusEl.textContent = ' + ';
+        await fadeIn(plusEl);
+        await fadeIn(reps2El, String(toParsed.segments[1]));
+      } else {
+        plusEl.style.opacity = '0';
+        reps2El.style.opacity = '0';
+      }
+
+      animationRunning = false;
+    }
+
+    recordEl.addEventListener('click', ()=>{ playSwapAnimation(); });
+
+    (async ()=>{
+      await new Promise(r=>setTimeout(r, 500));
+      await playSwapAnimation();
+      await new Promise(r=>setTimeout(r, 400));
+      await fadeIn(sessEl);
+    })();
   }
 }
 
