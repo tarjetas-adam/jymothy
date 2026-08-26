@@ -634,6 +634,7 @@ let planOpenExIds = new Set();
 let overviewOpenExIds = new Set();
 let overviewUnlocked = false;
 let lastLoggedExId = null;
+let lastActionWasUnlog = false;
 let newPlanExIds = [];
 let justToggledExId = null;
 let pendingScrollRestore = null;
@@ -741,6 +742,7 @@ function toggleSetDone(exId, i, exState, allowTimerStart){
   const doneBefore = exState.sets.filter(x=>x.done).length;
   dotsFillAnimateFrom = totalSetsForBar>0 ? Math.round((doneBefore/totalSetsForBar)*100) : 0;
   exState.sets[i].done = !exState.sets[i].done;
+  lastActionWasUnlog = !exState.sets[i].done;
   let improved = false;
   if(exState.sets[i].done){
     checkImprovement(exId, i, exState);
@@ -1076,9 +1078,15 @@ function popVertical(direction){
     let targetIdx = null;
     let advancingToNew = false;
     const originalCurrentId = s.exerciseOrder[s.currentIndex];
-    if(!isExDone(originalCurrentId)){
+
+    if(lastActionWasUnlog && lastLoggedExId){
+      const unlogIdx = s.exerciseOrder.indexOf(lastLoggedExId);
+      if(unlogIdx !== -1) targetIdx = unlogIdx;
+    }
+
+    if(targetIdx===null && !isExDone(originalCurrentId)){
       targetIdx = s.currentIndex;
-    } else {
+    } else if(targetIdx===null){
       if(lastLoggedExId){
         const lastIdx = s.exerciseOrder.indexOf(lastLoggedExId);
         if(lastIdx !== -1) targetIdx = isExDone(lastLoggedExId) ? null : lastIdx;
@@ -1092,6 +1100,7 @@ function popVertical(direction){
         advancingToNew = true;
       }
     }
+    lastActionWasUnlog = false;
     if(targetIdx!==null){
       s.currentIndex = targetIdx; saveState();
       if(advancingToNew){
@@ -3395,72 +3404,144 @@ function renderSessionSummary(){
     <div class="sub" style="margin-top:2px">${session ? session.exercises.length : 0} exercises logged to your Training Log.</div>`;
   app.appendChild(hero);
 
-  const bumpQueue = [];
-  function bumpValueText(weight, reps){ return `${weight}kg × ${fmtReps(reps)}`; }
-  function charSpans(text){
-    return text.split('').map(ch=>`<span class="bump-char">${ch===' '?'&nbsp;':ch}</span>`).join('');
-  }
-  if(session && session.exercises.length){
-    session.exercises.forEach(ex=>{
-      const exBumps = bumps.filter(b=>b.exerciseId===ex.exerciseId);
-      const bumpHTML = exBumps.map((b,bi)=>{
-        const bumpId = `bump-${ex.exerciseId}-${bi}`;
-        const fromText = bumpValueText(b.fromWeight, b.fromReps);
-        const toText = bumpValueText(b.toWeight, b.toReps);
-        const reservedWidth = Math.max(fromText.length, toText.length);
-        return `<div class="bump" id="${bumpId}"><span class="bump-label">↑ Set ${b.setNum}:</span> <span class="bump-value" style="min-width:${reservedWidth}ch;">${charSpans(fromText)}</span><span class="improve-arrows" style="position:relative;display:inline-flex;"></span></div>`;
-      }).join('');
-      exBumps.forEach((b,bi)=>bumpQueue.push({id:`bump-${ex.exerciseId}-${bi}`, b}));
-      const row = document.createElement('div');
-      row.className='list-row';
-      row.innerHTML = `<div class="name">${ex.name}</div>${bumpHTML}`;
-      app.appendChild(row);
-    });
+  if(!session || !session.exercises.length){
+    const btnRow0 = document.createElement('div');
+    btnRow0.className='btn-row';
+    btnRow0.innerHTML = `<button class="btn primary btn-press" id="doneBtn" style="color:var(--text)">Back to home</button>`;
+    app.appendChild(btnRow0);
+    btnRow0.querySelector('#doneBtn').addEventListener('click', toHome);
+    return;
   }
 
-  function animateBump(id, b){
-    return new Promise(resolve=>{
-      const el = document.getElementById(id);
-      if(!el){ resolve(); return; }
-      const valueEl = el.querySelector('.bump-value');
-      const arrowsEl = el.querySelector('.improve-arrows');
-      setTimeout(()=>{
-        const outChars = [...valueEl.querySelectorAll('.bump-char')];
-        outChars.forEach((c,ci)=>{
-          c.style.transition = 'opacity .15s ease';
-          setTimeout(()=>{ c.style.opacity = '0'; }, ci*35);
-        });
-        const outDuration = outChars.length*35 + 200;
-        setTimeout(()=>{
-          valueEl.innerHTML = charSpans(bumpValueText(b.toWeight,b.toReps));
-          const inChars = [...valueEl.querySelectorAll('.bump-char')];
-          inChars.forEach(c=>{ c.style.opacity='0'; });
-          inChars.forEach((c,ci)=>{
-            c.style.transition = 'opacity .15s ease';
-            setTimeout(()=>{ c.style.opacity = '1'; }, ci*35);
-          });
-          const inDuration = inChars.length*35 + 200;
-          setTimeout(()=>{
-            arrowsEl.innerHTML = `<span class="arrow-up" style="animation-delay:0ms">^</span><span class="arrow-up" style="animation-delay:220ms">^</span><span class="arrow-up" style="animation-delay:440ms">^</span>`;
-            setTimeout(resolve, 1600);
-          }, inDuration);
-        }, outDuration);
-      }, 2200);
-    });
+  const improvedExIds = new Set(bumps.map(b=>b.exerciseId));
+  const improvedExercises = session.exercises.filter(ex=>improvedExIds.has(ex.exerciseId));
+  const plainExercises = session.exercises.filter(ex=>!improvedExIds.has(ex.exerciseId));
+
+  if(improvedExercises.length){
+    const improvedLabel = document.createElement('div');
+    improvedLabel.className = 'section-label';
+    improvedLabel.textContent = 'Improved this session';
+    app.appendChild(improvedLabel);
   }
 
-  (async ()=>{
-    for(const item of bumpQueue){
-      await animateBump(item.id, item.b);
-      await new Promise(r=>setTimeout(r, 350));
-    }
-  })();
+  const improvedRows = [];
+  improvedExercises.forEach(ex=>{
+    const exBumps = bumps.filter(b=>b.exerciseId===ex.exerciseId);
+    const row = document.createElement('div');
+    row.className='list-row';
+    row.style.background = 'transparent';
+    row.style.flexDirection = 'column';
+    row.style.alignItems = 'stretch';
+    row.innerHTML = `<div class="name" style="opacity:0;transform:translateY(8px);"></div>`;
+    row.querySelector('.name').textContent = ex.name;
+    app.appendChild(row);
+    improvedRows.push({row, bumps: exBumps});
+  });
+
+  let plainLabel = null;
+  if(plainExercises.length){
+    plainLabel = document.createElement('div');
+    plainLabel.className = 'section-label';
+    plainLabel.textContent = 'Everything else logged';
+    plainLabel.style.opacity = '0';
+    app.appendChild(plainLabel);
+  }
+  const plainRows = [];
+  plainExercises.forEach(ex=>{
+    const row = document.createElement('div');
+    row.className='list-row';
+    row.style.background = 'transparent';
+    row.innerHTML = `<div class="name" style="opacity:0;transform:translateY(8px);"></div>`;
+    row.querySelector('.name').textContent = ex.name;
+    app.appendChild(row);
+    plainRows.push(row);
+  });
 
   const btnRow = document.createElement('div');
   btnRow.className='btn-row';
   btnRow.innerHTML = `<button class="btn primary btn-press" id="doneBtn" style="color:var(--text)">Back to home</button>`;
   app.appendChild(btnRow);
   btnRow.querySelector('#doneBtn').addEventListener('click', toHome);
+
+  function bumpValueText(weight, reps){ return `${weight}kg × ${fmtReps(reps)}`; }
+  function charSpans(text){
+    return text.split('').map(ch=>`<span class="bump-char">${ch===' '?'&nbsp;':ch}</span>`).join('');
+  }
+
+  function fadeInBoxShell(row){
+    return new Promise(resolve=>{
+      row.style.transition = 'background .35s ease';
+      row.style.background = 'var(--card)';
+      setTimeout(resolve, 300);
+    });
+  }
+  function fadeInLine(el, targetOpacity){
+    return new Promise(resolve=>{
+      el.style.transition = 'opacity .4s ease, transform .4s cubic-bezier(.16,1,.3,1)';
+      el.style.opacity = targetOpacity;
+      el.style.transform = 'translateY(0)';
+      setTimeout(resolve, 320);
+    });
+  }
+
+  function animateBumpLine(row, b){
+    return new Promise(resolve=>{
+      const bumpEl = document.createElement('div');
+      bumpEl.className = 'bump';
+      bumpEl.style.opacity = '0';
+      bumpEl.innerHTML = `<span class="bump-label">↑ Set ${b.setNum}:</span> <span class="bump-value"></span><span class="improve-arrows" style="position:relative;display:inline-flex;"></span>`;
+      row.appendChild(bumpEl);
+      const valueEl = bumpEl.querySelector('.bump-value');
+      const arrowsEl = bumpEl.querySelector('.improve-arrows');
+      const fromText = bumpValueText(b.fromWeight, b.fromReps);
+      const toText = bumpValueText(b.toWeight, b.toReps);
+      const reservedWidth = Math.max(fromText.length, toText.length);
+      valueEl.style.minWidth = reservedWidth + 'ch';
+      valueEl.innerHTML = charSpans(fromText);
+
+      bumpEl.style.transition = 'opacity .4s ease';
+      void bumpEl.offsetHeight;
+      bumpEl.style.opacity = '1';
+
+      setTimeout(()=>{
+        arrowsEl.innerHTML = `<span class="arrow-up" style="animation-delay:0ms">^</span><span class="arrow-up" style="animation-delay:220ms">^</span><span class="arrow-up" style="animation-delay:440ms">^</span>`;
+        setTimeout(()=>{
+          const outChars = [...valueEl.querySelectorAll('.bump-char')];
+          outChars.forEach(c=>{ c.style.transition = 'opacity .15s ease'; c.style.opacity = '0'; });
+          setTimeout(()=>{
+            valueEl.innerHTML = charSpans(toText);
+            const inChars = [...valueEl.querySelectorAll('.bump-char')];
+            inChars.forEach(c=>{ c.style.opacity='0'; });
+            inChars.forEach((c,ci)=>{
+              c.style.transition = 'opacity .15s ease';
+              setTimeout(()=>{ c.style.opacity = '1'; }, ci*35);
+            });
+            const inDuration = inChars.length*35 + 200;
+            setTimeout(resolve, inDuration + 700);
+          }, 350);
+        }, 500);
+      }, 1800);
+    });
+  }
+
+  (async ()=>{
+    for(const {row, bumps: exBumps} of improvedRows){
+      await fadeInBoxShell(row);
+      await fadeInLine(row.querySelector('.name'), '1');
+      for(const b of exBumps){
+        await animateBumpLine(row, b);
+      }
+    }
+    if(plainLabel){
+      plainLabel.style.transition = 'opacity .5s ease';
+      plainLabel.style.opacity = '1';
+      await new Promise(r=>setTimeout(r, 400));
+    }
+    for(const row of plainRows){
+      await fadeInBoxShell(row);
+      await fadeInLine(row.querySelector('.name'), '.85');
+    }
+  })();
 }
 
 // ---------- TRAINING LOG ----------
