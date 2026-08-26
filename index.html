@@ -556,16 +556,42 @@ h1.hero{
 }
 .session-ex-block.open .sx-setlist{grid-template-rows:1fr;padding:0 20px 16px 20px;}
 .sx-setlist-inner{overflow:hidden;min-height:0;display:flex;flex-direction:column;gap:6px;}
-.sx-setrow{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid rgba(28,20,13,.3);cursor:pointer;transition:opacity .15s ease;}
+.sx-setrow{display:flex;align-items:center;gap:10px;padding:6px 0;box-sizing:border-box;border-top:1px solid rgba(28,20,13,.3);cursor:pointer;transition:opacity .15s ease;}
+.sx-set-edit{
+  display:flex;align-items:center;gap:10px;padding:6px 0;box-sizing:border-box;
+  border-top:1px solid rgba(28,20,13,.3);
+}
+.sx-set-edit:first-child{border-top:none;padding-top:0;}
+.sx-set-edit .numfield-plain, .sx-set-edit .x{
+  font-size:12.5px !important;
+  font-weight:400 !important;
+  line-height:1 !important;
+  font-family:'Space Mono',monospace !important;
+  height:18px !important;
+  min-height:0 !important;
+  max-height:18px !important;
+  -webkit-appearance:none !important;
+  appearance:none !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  box-sizing:border-box !important;
+}
+.sx-set-edit .pausebtn-fixed, .sx-set-edit .delsetbtn-x{
+  width:18px !important;height:18px !important;font-size:11px !important;
+  min-height:0 !important;-webkit-appearance:none !important;appearance:none !important;
+  box-sizing:border-box !important;
+}
 .sx-setrow:active{opacity:.6;}
 .sx-setrow:first-child{border-top:none;padding-top:0;}
 .sx-setcheck{
   width:18px;height:18px;border-radius:6px;border:1.5px solid var(--text-faint);
   flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:transparent;
+  box-sizing:border-box;
 }
 .sx-setcheck.done.push{background:var(--push);border-color:var(--push);color:#FFFFFF;}
 .sx-setcheck.done.pull{background:var(--pull);border-color:var(--pull);color:#FFFFFF;}
-.sx-settext{font-family:'Space Mono',monospace;font-size:12.5px;color:var(--text-dim);}
+.sx-settext{font-family:'Space Mono',monospace;font-size:12.5px;color:var(--text-dim);height:18px;display:inline-flex;align-items:center;box-sizing:border-box;}
 .sx-setrow:has(.sx-setcheck.done) .sx-settext{color:var(--text);}
 .tinylabel{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.1em;color:var(--text-faint);text-transform:uppercase;padding:0 24px;}
 .session-row{margin:10px 24px;border-radius:14px;background:var(--card);overflow:hidden;}
@@ -633,6 +659,7 @@ let newSetIndex = null;
 let planOpenExIds = new Set();
 let overviewOpenExIds = new Set();
 let overviewUnlocked = false;
+let overviewEditingKey = null;
 let lastLoggedExId = null;
 let lastActionWasUnlog = false;
 let newPlanExIds = [];
@@ -2030,8 +2057,8 @@ function renderPlanDetail({planId}){
   settingsRow.style.margin = '4px 0 14px 0';
   settingsRow.style.flexShrink = '0';
   settingsRow.innerHTML = `
-    <button class="btn ghost small btn-press" id="warmupSettingBtn" style="flex:1;width:auto;">Warm-up &amp; Stretch</button>
-    <button class="btn ghost small btn-press" id="restSettingBtn" style="flex:1;width:auto;">Rest${plan.restSeconds?` · ${plan.restSeconds}s`:''}</button>`;
+    <button class="btn ghost small btn-press" id="warmupSettingBtn" style="flex:1;width:auto;font-size:11.5px;white-space:nowrap;">Warm-up &amp; Stretch</button>
+    <button class="btn ghost small btn-press" id="restSettingBtn" style="flex:1;width:auto;font-size:11.5px;white-space:nowrap;">Rest${plan.restSeconds?` · ${plan.restSeconds}s`:''}</button>`;
   pageWrap.appendChild(settingsRow);
   settingsRow.querySelector('#restSettingBtn').addEventListener('click', ()=>{ setTimeout(()=>openRestSettingModal(plan), 250); });
   settingsRow.querySelector('#warmupSettingBtn').addEventListener('click', ()=>{ setTimeout(()=>openWarmupSettingModal(plan), 250); });
@@ -2751,6 +2778,7 @@ function startSession(plan){
   phaseTimerEndTime = null; phaseTimerStarted = false;
   editRow = null; editRowExId = null; lastShownExId = null; justLoggedKey = null; revealDelayKey = null; newSetIndex = null;
   overviewUnlocked = false;
+  overviewEditingKey = null;
   lastLoggedExId = null;
   const warmupSecs = plan.warmupSeconds===undefined ? 300 : plan.warmupSeconds;
   nav = [{screen:'home'},{screen: warmupSecs>0 ? 'sessionWarmup' : 'sessionRunner'}];
@@ -3222,6 +3250,11 @@ function openNumpad(initial, title, allowDecimal, onConfirm){
   }
   draw();
   document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e)=>{
+    if(e.target === overlay){
+      document.body.removeChild(overlay);
+    }
+  });
 }
 
 function renderSessionOverview(){
@@ -3269,11 +3302,34 @@ function renderSessionOverview(){
       </div>
       <div class="sx-setlist">
         <div class="sx-setlist-inner">
-          ${st.sets.map((set,si)=>`
+          ${st.sets.map((set,si)=>{
+            if(set.deleted) return '';
+            const editKey = `${id}:${si}`;
+            if(overviewEditingKey === editKey){
+              const {segments} = parseReps(set.reps);
+              let repsHTML = `<button class="numfield-plain nodrag" data-field="repsA" data-exid="${id}" data-si="${si}">${segments[0]}</button>`;
+              let pauseLabel = '+';
+              if(segments.length>1){
+                repsHTML += `<span class="x nodrag">+</span><button class="numfield-plain nodrag" data-field="repsB" data-exid="${id}" data-si="${si}">${segments[1]}</button>`;
+                pauseLabel = '−';
+              }
+              return `<div class="sx-set-edit nodrag ${cls==='pull'?'pull':''}" data-exid="${id}" data-si="${si}">
+                <span class="sx-setcheck${set.done?' done '+cls:''} nodrag">${set.done?'✓':''}</span>
+                <button class="numfield-plain nodrag" data-field="weight" data-exid="${id}" data-si="${si}">${set.weight}kg</button>
+                <span class="x nodrag">×</span>
+                ${repsHTML}
+                <span class="dc-group">
+                  <button class="pausebtn pausebtn-fixed nodrag" data-exid="${id}" data-si="${si}">${pauseLabel}</button>
+                  <span class="delsetbtn delsetbtn-x nodrag" data-exid="${id}" data-si="${si}">×</span>
+                </span>
+              </div>`;
+            }
+            return `
             <div class="sx-setrow nodrag" data-exid="${id}" data-si="${si}">
-              <span class="sx-setcheck${set.done?' done '+cls:''}">${set.done?'✓':''}</span>
-              <span class="sx-settext">${set.weight}kg × ${fmtReps(set.reps)}</span>
-            </div>`).join('')}
+              <span class="sx-setcheck${set.done?' done '+cls:''}" data-exid="${id}" data-si="${si}">${set.done?'✓':''}</span>
+              <span class="sx-settext" data-exid="${id}" data-si="${si}">${set.weight}kg × ${fmtReps(set.reps)}</span>
+            </div>`;
+          }).join('')}
         </div>
       </div>`;
     list.appendChild(block);
@@ -3281,23 +3337,108 @@ function renderSessionOverview(){
   paper.appendChild(list);
   app.appendChild(paper);
 
-  list.querySelectorAll('.sx-setrow').forEach(row=>{
-    row.addEventListener('click', (e)=>{
+  list.querySelectorAll('.sx-setcheck').forEach(checkEl=>{
+    checkEl.addEventListener('click', (e)=>{
       e.stopPropagation();
-      const exId = row.dataset.exid;
-      const si = row.dataset.si;
+      const exId = checkEl.dataset.exid;
+      const si = checkEl.dataset.si;
       const exState = s.exercisesState[exId];
       if(!exState) return;
       if(exState.sets[si].done && !overviewUnlocked) return;
       toggleSetDone(exId, si, exState, false);
       saveState();
       const set = exState.sets[si];
-      const checkEl = row.querySelector('.sx-setcheck');
-      if(checkEl){
-        checkEl.classList.toggle('done', set.done);
-        checkEl.classList.toggle(cls, set.done);
-        checkEl.textContent = set.done ? '✓' : '';
+      checkEl.classList.toggle('done', set.done);
+      checkEl.classList.toggle(cls, set.done);
+      checkEl.textContent = set.done ? '✓' : '';
+    });
+  });
+
+  list.querySelectorAll('.sx-setrow').forEach(rowEl=>{
+    rowEl.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      overviewEditingKey = `${rowEl.dataset.exid}:${rowEl.dataset.si}`;
+      render();
+    });
+  });
+
+  list.querySelectorAll('.sx-set-edit').forEach(editEl=>{
+    editEl.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      overviewEditingKey = null;
+      render();
+    });
+  });
+
+  list.querySelectorAll('.numfield-plain').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const exId = el.dataset.exid, si = el.dataset.si, field = el.dataset.field;
+      const exState = s.exercisesState[exId];
+      if(!exState) return;
+      if(field==='weight'){
+        openNumpad(exState.sets[si].weight, 'Weight (kg)', true, v=>{
+          exState.sets[si].weight = v;
+          saveState(); render();
+        });
+      } else if(field==='repsA'){
+        const {segments} = parseReps(exState.sets[si].reps);
+        openNumpad(segments[0], 'Reps', false, v=>{
+          const {segments} = parseReps(exState.sets[si].reps);
+          const newA = Math.round(v);
+          if(segments.length>1){
+            const total = segments[0]+segments[1];
+            segments[0] = newA;
+            segments[1] = Math.max(0, total-newA);
+          } else {
+            segments[0] = newA;
+          }
+          exState.sets[si].reps = segments.join('+');
+          saveState(); render();
+        });
+      } else if(field==='repsB'){
+        const {segments} = parseReps(exState.sets[si].reps);
+        openNumpad(segments[1], 'Reps after pause', false, v=>{
+          const {segments} = parseReps(exState.sets[si].reps);
+          const newB = Math.round(v);
+          const total = segments[0]+segments[1];
+          segments[1] = newB;
+          segments[0] = Math.max(0, total-newB);
+          exState.sets[si].reps = segments.join('+');
+          saveState(); render();
+        });
       }
+    });
+  });
+
+  list.querySelectorAll('.pausebtn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const exId = btn.dataset.exid, si = btn.dataset.si;
+      const exState = s.exercisesState[exId];
+      if(!exState) return;
+      const {segments} = parseReps(exState.sets[si].reps);
+      if(segments.length>1){
+        exState.sets[si].reps = String(segments[0]+segments[1]);
+      } else {
+        const total = segments[0];
+        const second = total>2 ? 2 : 1;
+        const first = Math.max(1, total-second);
+        exState.sets[si].reps = `${first}+${second}`;
+      }
+      saveState(); render();
+    });
+  });
+
+  list.querySelectorAll('.delsetbtn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const exId = btn.dataset.exid, si = btn.dataset.si;
+      const exState = s.exercisesState[exId];
+      if(!exState) return;
+      exState.sets[si].deleted = true;
+      if(overviewEditingKey === `${exId}:${si}`) overviewEditingKey = null;
+      saveState(); render();
     });
   });
 
@@ -3318,6 +3459,7 @@ function finishSession(){
   flushSessionRunnerTimeouts();
   stopRestTimer();
   overviewUnlocked = false;
+  overviewEditingKey = null;
   if(phaseTimerRAF){ cancelAnimationFrame(phaseTimerRAF); phaseTimerRAF = null; }
   phaseTimerEndTime = null; phaseTimerStarted = false;
   const s = state.activeSession;
@@ -3890,7 +4032,7 @@ document.addEventListener('touchend', (e)=>{
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('SW registration failed', err));
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
   });
 }
 
