@@ -3508,27 +3508,33 @@ function finishSession(){
   state.sessions.unshift(session);
   state.activeSession = null;
   saveState();
-  nav = [{screen:'home'},{screen:'sessionSummary'}];
-  wizard.lastBumps = bumps;
-  wizard.lastSession = session;
-  render();
-  window.scrollTo(0,0);
-  app.classList.add('swipe-card');
-  app.style.transformOrigin = 'left center';
-  app.style.transition = 'none';
-  app.style.transform = 'translateX(-45%)';
-  app.style.opacity = '0.5';
-  app.offsetHeight;
-  app.style.transition = 'transform .95s cubic-bezier(.19,1,.22,1), opacity .5s ease';
-  app.style.transform = 'translateX(0)';
-  app.style.opacity = '1';
+
+  app.style.transition = 'opacity .4s ease';
+  app.style.opacity = '0';
   setTimeout(()=>{
     app.style.transition = '';
-    app.style.transform = '';
-    app.style.opacity = '';
-    app.style.transformOrigin = '';
-    app.classList.remove('swipe-card');
-  }, 970);
+    nav = [{screen:'home'},{screen:'sessionSummary'}];
+    wizard.lastBumps = bumps;
+    wizard.lastSession = session;
+    render();
+    window.scrollTo(0,0);
+    app.classList.add('swipe-card');
+    app.style.transformOrigin = 'left center';
+    app.style.transition = 'none';
+    app.style.transform = 'translateX(-45%)';
+    app.style.opacity = '0.5';
+    app.offsetHeight;
+    app.style.transition = 'transform .95s cubic-bezier(.19,1,.22,1), opacity .5s ease';
+    app.style.transform = 'translateX(0)';
+    app.style.opacity = '1';
+    setTimeout(()=>{
+      app.style.transition = '';
+      app.style.transform = '';
+      app.style.opacity = '';
+      app.style.transformOrigin = '';
+      app.classList.remove('swipe-card');
+    }, 970);
+  }, 420);
 }
 
 function renderSessionSummary(){
@@ -3670,6 +3676,7 @@ function renderSessionSummary(){
     for(const {row, bumps: exBumps} of improvedRows){
       await fadeInBoxShell(row);
       await fadeInLine(row.querySelector('.name'), '1');
+      await new Promise(r=>setTimeout(r, 900));
       for(const b of exBumps){
         await animateBumpLine(row, b);
       }
