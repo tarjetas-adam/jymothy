@@ -1203,10 +1203,11 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
     let placeholder=null, floatOffsetX=0, floatOffsetY=0;
 
     item.addEventListener('pointerdown', e=>{
-      if(e.target.closest('.nodrag')) return;
+      const isNodragTarget = !!e.target.closest('.nodrag');
       startX=e.clientX; startY=e.clientY; moved=false; dragging=false;
       let lastMoveY = e.clientY;
       const manualScrollParent = scrollBoundsEl || getScrollParent(container);
+      if(!isNodragTarget){
       timer = setTimeout(()=>{
         dragging=true;
         item.classList.add('dragging');
@@ -1246,6 +1247,7 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
         item.style.transform = 'scale(1.02)';
         document.body.appendChild(item);
       },320);
+      }
 
       function updateTargetFromPointer(y){
         const scrollDelta = scrollParent ? (scrollParent.scrollTop - initialScrollTop) : 0;
@@ -1333,7 +1335,7 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
           }, 180);
           const ids = [...container.querySelectorAll(itemSelector)].map(it=>it.dataset.id);
           onReorder && onReorder(ids);
-        } else if(!moved){
+        } else if(!moved && !isNodragTarget){
           onTap && onTap(item.dataset.id);
         }
       }
