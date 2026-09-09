@@ -3641,6 +3641,7 @@ function renderSessionSummary(){
       bumpEl.style.opacity = '0';
       bumpEl.innerHTML = `<span class="bump-label">↑ Set ${b.setNum}:</span> <span class="bump-value"></span><span class="improve-arrows" style="position:relative;display:inline-flex;"></span>`;
       row.appendChild(bumpEl);
+      bumpEl.scrollIntoView({behavior:'smooth', block:'nearest'});
       const valueEl = bumpEl.querySelector('.bump-value');
       const arrowsEl = bumpEl.querySelector('.improve-arrows');
       const fromText = bumpValueText(b.fromWeight, b.fromReps);
@@ -3674,8 +3675,13 @@ function renderSessionSummary(){
     });
   }
 
+  function scrollRowIntoView(el){
+    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
   (async ()=>{
     for(const {row, bumps: exBumps} of improvedRows){
+      scrollRowIntoView(row);
       await fadeInBoxShell(row);
       await fadeInLine(row.querySelector('.name'), '1');
       await new Promise(r=>setTimeout(r, 900));
@@ -3684,11 +3690,13 @@ function renderSessionSummary(){
       }
     }
     if(plainLabel){
+      scrollRowIntoView(plainLabel);
       plainLabel.style.transition = 'opacity .5s ease';
       plainLabel.style.opacity = '1';
       await new Promise(r=>setTimeout(r, 400));
     }
     for(const row of plainRows){
+      scrollRowIntoView(row);
       await fadeInBoxShell(row);
       await fadeInLine(row.querySelector('.name'), '.85');
     }
