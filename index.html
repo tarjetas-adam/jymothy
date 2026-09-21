@@ -122,7 +122,7 @@ h1.hero{
   cursor:pointer;border-radius:10px;
 }
 .iconbtn:active{background:var(--card-2);}
-.lock-shackle.unlocked{transform:translateX(-8px);}
+.lock-shackle.unlocked{transform:rotate(-38deg);}
 .topbar .title{font-family:'Space Mono',monospace;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);flex:1;}
 .card{
   position:relative;
@@ -3262,7 +3262,7 @@ function openNumpad(initial, title, allowDecimal, onConfirm){
 function renderSessionOverview(){
   const s = state.activeSession;
   if(!s){ toHome(); return; }
-  const lockIconSVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="overflow:visible;"><rect width="16" height="11" x="4" y="11" rx="2"/><path class="lock-shackle${overviewUnlocked?' unlocked':''}" style="transition:transform .45s cubic-bezier(.34,1.4,.64,1);" d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`;
+  const lockIconSVG = `<svg width="18" height="18" viewBox="0 0 24 24" style="overflow:visible;"><rect x="4.5" y="10" width="15" height="11.5" rx="3.2" fill="currentColor"/><circle cx="12" cy="14.6" r="1.5" style="fill:var(--bg)"/><rect x="11.1" y="14.6" width="1.8" height="3" rx="0.5" style="fill:var(--bg)"/><path class="lock-shackle${overviewUnlocked?' unlocked':''}" style="transform-origin:7px 10.5px;transition:transform .45s cubic-bezier(.34,1.4,.64,1);" d="M7 10.5V7.2a5 5 0 0 1 10 0v3.3" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>`;
   topbar('Overview', ()=>popVertical('left'), `<button class="iconbtn" id="overviewLockBtn">${lockIconSVG}</button>`, 'overviewLockBtn', ()=>{
     overviewUnlocked = !overviewUnlocked;
     render();
@@ -3336,6 +3336,10 @@ function renderSessionOverview(){
       </div>`;
     list.appendChild(block);
   });
+  const scrollBuffer = document.createElement('div');
+  scrollBuffer.className = 'overview-scroll-buffer';
+  scrollBuffer.style.height = '140px';
+  list.appendChild(scrollBuffer);
   paper.appendChild(list);
   app.appendChild(paper);
 
@@ -3480,7 +3484,11 @@ function finishSession(){
     // per-set progression: for every set that was logged, if it's an
     // improvement over the plan's starting number for that set, keep the
     // logged value as the new baseline going forward. Sets that weren't
-    // logged, or weren't an improvement, keep their original value.
+    // logged, and downgrade any set that came in below the plan's target —
+    // less weight, fewer total reps, or the same total broken into more/worse
+    // segments (e.g. planned "10", logged "8+2") — to whatever was actually
+    // logged. Only a truly unchanged set (identical weight and reps string)
+    // keeps its original value.
     const origSets = origBaselines[exId] || [];
     const isFirstTime = !hasExerciseHistory(exId);
     const newBaseline = st.sets.map((cur,i)=>{
@@ -3495,6 +3503,12 @@ function finishSession(){
             toWeight:cur.weight, toReps:cur.reps,
           });
         }
+        return {weight:cur.weight, reps:cur.reps};
+      }
+      if(cmp && cmp.type==='weightDown'){
+        return {weight:cur.weight, reps:cur.reps};
+      }
+      if(cmp && cmp.type==='flat' && cur.reps !== orig.reps){
         return {weight:cur.weight, reps:cur.reps};
       }
       return {weight:orig.weight, reps:orig.reps};
