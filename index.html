@@ -1494,6 +1494,12 @@ function attachDeckCardBehavior(div, deckId) {
     `;
     document.body.appendChild(ghost);
 
+    // Lock scrolling for the duration of the drag so the position snapshot
+    // below can never go stale — even a small native scroll bleed-through
+    // would shift the real cards without us knowing.
+    const home = document.getElementById('home');
+    if (home) { home.dataset.prevOverflowY = home.style.overflowY || ''; home.style.overflowY = 'hidden'; }
+
     // Snapshot every other card's true position now, before any shifting
     // starts. Hit-testing always compares against this fixed snapshot,
     // never a live getBoundingClientRect() — reading live rects while a
@@ -1566,6 +1572,9 @@ function attachDeckCardBehavior(div, deckId) {
 
     div.classList.remove('dragging');
     if (ghost) { ghost.remove(); ghost = null; }
+
+    const homeEl = document.getElementById('home');
+    if (homeEl) { homeEl.style.overflowY = homeEl.dataset.prevOverflowY || ''; delete homeEl.dataset.prevOverflowY; }
 
     const list = document.getElementById('deck-list');
     const allCards = [...list.querySelectorAll('.deck-card')];
