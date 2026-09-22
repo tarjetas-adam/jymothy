@@ -112,7 +112,7 @@
   .deck-card:hover { border-color: var(--accent); }
   .deck-card:active { opacity: 0.95; }
   .deck-card.dragging {
-    opacity: 0.5;
+    opacity: 1;
     border-color: var(--accent);
     box-shadow: var(--shadow-lg);
   }
@@ -1473,7 +1473,7 @@ function attachDeckCardBehavior(div, deckId) {
       width: ${rect.width}px;
       top: ${clientY - ghostOffsetY}px;
       z-index: 999;
-      opacity: 0.85;
+      opacity: 1;
       pointer-events: none;
       box-shadow: 0 12px 40px rgba(26,24,20,0.2);
       border: 1.5px solid var(--accent);
