@@ -49,7 +49,8 @@
   .screen.active { display: flex; }
 
   /* ── HOME ── */
-  #home { overflow-y: scroll; padding: 0 0 20px; -webkit-overflow-scrolling: touch; scroll-snap-type: y proximity; scroll-padding-top: var(--header-h, 180px); background: var(--bg); }
+  #home { overflow-y: scroll; padding: 0 0 20px; -webkit-overflow-scrolling: touch; scroll-snap-type: y proximity; scroll-padding-top: var(--header-h, 180px); background: var(--bg); scrollbar-width: none; -ms-overflow-style: none; }
+  #home::-webkit-scrollbar { display: none; }
   .deck-card { scroll-snap-align: start; scroll-snap-stop: normal; }
   .script-card { scroll-snap-align: start; scroll-snap-stop: normal; }
 
@@ -108,14 +109,18 @@
     border: 1.5px solid transparent;
     transition: box-shadow 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
     touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .deck-card:hover { border-color: var(--accent); }
   .deck-card:active { opacity: 0.95; }
   .deck-card.dragging {
     opacity: 1;
-    border-color: var(--accent);
-    box-shadow: var(--shadow-lg);
+    background: var(--bg);
+    border-color: transparent;
+    box-shadow: none;
   }
+  .deck-card.dragging > * { visibility: hidden; }
   .deck-card.drag-over {
     border-color: var(--accent);
     border-style: dashed;
@@ -1457,9 +1462,12 @@ function attachDeckCardBehavior(div, deckId) {
   const cancelLong = () => { clearTimeout(longPressTimer); };
 
   let dragCardH = 0;
+  let lastY = 0;
+  let basePositions = null; // {id -> {top, height}} captured once at drag start — never re-measured mid-animation
 
   const beginDrag = (clientY) => {
     dragging = true;
+    lastY = clientY;
     div.classList.add('dragging');
     dragCardH = div.getBoundingClientRect().height;
 
@@ -1467,6 +1475,7 @@ function attachDeckCardBehavior(div, deckId) {
     const rect = div.getBoundingClientRect();
     ghostOffsetY = clientY - rect.top;
     ghost = div.cloneNode(true);
+    ghost.classList.remove('dragging'); // the original already has this class — don't let the clone inherit it, or its own text gets hidden too
     ghost.style.cssText = `
       position: fixed;
       left: ${rect.left}px;
@@ -1475,14 +1484,27 @@ function attachDeckCardBehavior(div, deckId) {
       z-index: 999;
       opacity: 1;
       pointer-events: none;
-      box-shadow: 0 12px 40px rgba(26,24,20,0.2);
+      box-shadow: 0 16px 48px rgba(26,24,20,0.28);
       border: 1.5px solid var(--accent);
       border-radius: var(--radius);
       background: var(--surface);
       padding: 20px 20px 16px;
+      transform: scale(1.04);
       transition: none;
     `;
     document.body.appendChild(ghost);
+
+    // Snapshot every other card's true position now, before any shifting
+    // starts. Hit-testing always compares against this fixed snapshot,
+    // never a live getBoundingClientRect() — reading live rects while a
+    // card is mid-way through its own shift transition made the target
+    // position jump around instead of sliding smoothly.
+    const list = document.getElementById('deck-list');
+    basePositions = new Map();
+    [...list.querySelectorAll('.deck-card:not(.dragging)')].forEach(card => {
+      const r = card.getBoundingClientRect();
+      basePositions.set(card.dataset.id, { top: r.top, height: r.height });
+    });
   };
 
   let currentTargetId = null;
@@ -1492,28 +1514,25 @@ function attachDeckCardBehavior(div, deckId) {
     if (!dragging) return;
     ghost.style.top = (clientY - ghostOffsetY) + 'px';
 
+    // Use the leading edge of the dragged card — its bottom when moving
+    // down, its top when moving up — against each other card's midpoint,
+    // rather than just the raw finger position.
+    const movingDown = clientY >= lastY;
+    lastY = clientY;
+    const ghostTop = clientY - ghostOffsetY;
+    const ghostBottom = ghostTop + dragCardH;
+    const edgeY = movingDown ? ghostBottom : ghostTop;
+
     const list = document.getElementById('deck-list');
     const fromIdx = decks.findIndex(d => d.id === deckId);
     const cards = [...list.querySelectorAll('.deck-card:not(.dragging)')];
     const cardH = dragCardH + 12;
 
-    // Calculate current shifts so we can reverse them for hit-testing
-    const prevToIdx = currentTargetId && currentTargetId !== '__end__'
-      ? decks.findIndex(d => d.id === currentTargetId)
-      : (currentTargetId === '__end__' ? decks.length : -1);
-
     let insertBefore = null;
     for (const card of cards) {
-      const cardDeckIdx = decks.findIndex(d => d.id === card.dataset.id);
-      const rect = card.getBoundingClientRect();
-      // Reverse the current shift to get original position
-      let currentShift = 0;
-      if (prevToIdx >= 0) {
-        if (fromIdx < prevToIdx && cardDeckIdx > fromIdx && cardDeckIdx < prevToIdx) currentShift = -cardH;
-        else if (fromIdx > prevToIdx && cardDeckIdx >= prevToIdx && cardDeckIdx < fromIdx) currentShift = cardH;
-      }
-      const origTop = rect.top - currentShift;
-      if (clientY < origTop + rect.height * 0.5) { insertBefore = card; break; }
+      const pos = basePositions.get(card.dataset.id);
+      if (!pos) continue;
+      if (edgeY < pos.top + pos.height * 0.5) { insertBefore = card; break; }
     }
 
     const targetId = insertBefore ? insertBefore.dataset.id : '__end__';
