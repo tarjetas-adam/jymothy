@@ -443,7 +443,7 @@ h1.hero{
   background:linear-gradient(to top, var(--bg) 70%, transparent);
 }
 .bottombar-inner{max-width:560px;margin:0 auto;display:flex;gap:10px;}
-.bottombar-inner .btn{flex:1;}
+.bottombar-inner .btn{flex:1;padding-left:6px;padding-right:6px;white-space:nowrap;}
 .bottom-spacer{height:82px;}
 .hero-mini{padding:8px 24px 4px 24px;}
 .hero-mini .t{font-family:'Anton',sans-serif;font-size:32px;text-transform:uppercase;line-height:1;}
@@ -3119,8 +3119,12 @@ function renderSessionRunner(){
   const addSetRow = document.createElement('div');
   addSetRow.className='px'+(advanced?' ex-enter':'');
   addSetRow.style.marginTop='4px';
-  addSetRow.innerHTML = `<button class="btn ghost small btn-press" id="addRunnerSetBtn">+ Add set</button>`;
+  addSetRow.style.display = 'flex';
+  addSetRow.style.gap = '10px';
+  addSetRow.innerHTML = `<button class="btn ghost small btn-press" id="addRunnerSetBtn">+ Add set</button>
+    <button class="btn ghost small btn-press" id="removeRunnerExBtn">Remove exercise</button>`;
   app.appendChild(addSetRow);
+  addSetRow.querySelector('#removeRunnerExBtn').addEventListener('click', ()=>removeExerciseFromSession(exId));
   addSetRow.querySelector('#addRunnerSetBtn').addEventListener('click', ()=>{
     const last = exState.sets[exState.sets.length-1] || {weight:20,reps:"10"};
     exState.sets.push({weight:last.weight, reps:last.reps, done:false});
@@ -3137,12 +3141,85 @@ function renderSessionRunner(){
   bottomBar.innerHTML = `<div class="bottombar-inner${advanced?' ex-enter':''}">
       <button class="btn ghost small btn-press" id="zoomBtn">Overview</button>
       <button class="btn ghost small btn-press" id="finishBtn">End session</button>
+      <button class="btn ghost small btn-press" id="cancelSessionBtn">Cancel</button>
     </div>`;
   app.appendChild(bottomBar);
   bottomBar.querySelector('#zoomBtn').addEventListener('click', (e)=>{ flushSessionRunnerTimeouts(); pushExpand('sessionOverview', e.currentTarget); });
   bottomBar.querySelector('#finishBtn').addEventListener('click', ()=>{
     openConfirm('Are you sure you want to end the session?', finishSession, 'End session');
   });
+  bottomBar.querySelector('#cancelSessionBtn').addEventListener('click', ()=>{
+    openConfirm('Cancel this session? Nothing will be saved and your plan stays as it was.', cancelSession, 'Cancel session');
+  });
+}
+
+// Pulls session (plan) definitions from the sheet's "sessions" tab via the same Apps Script URL.
+// Each set arrives as text like "27.5x6+4" (weight x reps). The sheet decides which exercises
+// are in a session, their order and the rest time. Set targets from the sheet are only applied
+// when that row changed in the sheet since the last sync, so progress made in the app isn't reset.
+async function syncSessionsFromSheet(url){
+  let data;
+  try{
+    const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'type=sessions');
+    data = await res.json();
+  }catch(err){ return {error:true}; }
+  if(!data || Array.isArray(data) || !Array.isArray(data.sessions)) return {unsupported:true};
+
+  function parseSheetSet(txt){
+    const m = String(txt).trim().replace(/,/g,'.').match(/^([\d.]+)\s*(?:kg)?\s*[x×*]\s*(\d+(?:\s*\+\s*\d+)?)\s*$/i);
+    if(!m) return null;
+    const weight = parseFloat(m[1]);
+    if(isNaN(weight)) return null;
+    return {weight, reps:m[2].replace(/\s+/g,'')};
+  }
+
+  let added = 0, updated = 0;
+  data.sessions.forEach(sess=>{
+    const name = String(sess.name||'').trim();
+    if(!name || !Array.isArray(sess.exercises) || sess.exercises.length===0) return;
+    const plan0 = state.plans.find(p=>p.name.toLowerCase()===name.toLowerCase());
+    const oldSig = (plan0 && plan0.sheetSig) || {};
+    const before = plan0 ? JSON.stringify([plan0.exerciseIds, plan0.restSeconds||0, oldSig]) : null;
+    const exerciseIds = [];
+    const sig = {};
+    sess.exercises.forEach(row=>{
+      const exName = String(row.name||'').trim();
+      if(!exName) return;
+      let ex = state.library.find(e=>e.name.toLowerCase()===exName.toLowerCase());
+      if(!ex){
+        ex = {id:uid(), name:exName, category:guessCategory(exName)};
+        state.library.push(ex);
+      }
+      if(exerciseIds.includes(ex.id)) return;
+      exerciseIds.push(ex.id);
+      const rawSets = (row.sets||[]).map(s=>String(s).trim()).filter(Boolean);
+      const rowSig = rawSets.join('|');
+      sig[ex.id] = rowSig;
+      const sets = rawSets.map(parseSheetSet).filter(Boolean);
+      const hasBaseline = !!state.baselines[ex.id];
+      if(sets.length>0 && (!hasBaseline || oldSig[ex.id] !== rowSig)){
+        state.baselines[ex.id] = sets;
+      } else if(!hasBaseline){
+        state.baselines[ex.id] = [{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}];
+      }
+    });
+    if(exerciseIds.length===0) return;
+    const pushCount = exerciseIds.filter(id=>{ const e=getEx(id); return e && e.category==='empujar'; }).length;
+    const category = (exerciseIds.length-pushCount) > pushCount ? 'tirar' : 'empujar';
+    const rest = parseInt(sess.rest,10) || 0;
+    let plan = plan0;
+    if(!plan){
+      plan = {id:uid(), name, category, exerciseIds:[], createdAt:new Date().toISOString()};
+      state.plans.push(plan);
+      added++;
+    }
+    plan.category = category;
+    plan.exerciseIds = exerciseIds;
+    if(rest) plan.restSeconds = rest;
+    plan.sheetSig = sig;
+    if(before !== null && before !== JSON.stringify([plan.exerciseIds, plan.restSeconds||0, plan.sheetSig])) updated++;
+  });
+  return {added, updated};
 }
 
 function openSheetSyncModal(){
@@ -3152,7 +3229,7 @@ function openSheetSyncModal(){
     <div class="modal-card">
       <div class="field-label">Google Sheet sync</div>
       <input type="text" class="namefield" style="margin:0 0 10px 0;width:100%" id="sheetUrlInput" placeholder="Paste your Apps Script Web App URL" value="${state.sheetSyncUrl||''}">
-      <div class="sub" style="margin-bottom:14px">Reads Name (col A), Category (col B: empujar/tirar), and Body Part (col C, e.g. Chest/Back/Legs) from your sheet, skipping the header row.</div>
+      <div class="sub" style="margin-bottom:14px">Reads Name (col A), Category (col B: empujar/tirar), and Body Part (col C, e.g. Chest/Back/Legs) from your sheet, skipping the header row. Also reads your "sessions" tab, if you have one, to build or update plans.</div>
       <button class="btn primary btn-press" id="syncNowBtn" style="margin-bottom:8px">Sync now</button>
       <button class="btn ghost btn-press" id="removeStartersBtn" style="margin-bottom:8px;color:var(--danger)">Remove starter exercises</button>
       <button class="btn ghost btn-press" id="closeSyncBtn">Close</button>
@@ -3206,9 +3283,14 @@ function openSheetSyncModal(){
           added++;
         }
       });
+      const sessRes = await syncSessionsFromSheet(url);
       saveState();
       document.body.removeChild(overlay);
-      openAlert(`Synced: ${added} added, ${updated} updated.`);
+      let msg = `Synced: ${added} added, ${updated} updated.`;
+      if(sessRes.unsupported) msg += ' Sessions: add the sessions code to your Apps Script to sync them.';
+      else if(sessRes.error) msg += ' Sessions could not be read.';
+      else msg += ` Sessions: ${sessRes.added} added, ${sessRes.updated} updated.`;
+      openAlert(msg);
       render();
     }catch(err){
       btn.textContent = 'Sync now';
@@ -3539,6 +3621,18 @@ function removeExerciseFromSession(exId){
     if(lastLoggedExId === exId) lastLoggedExId = null;
     if(restTimerExId === exId) stopRestTimer();
     saveState();
+    const allDone = s.exerciseOrder.every(id=>{
+      const sets = s.exercisesState[id].sets.filter(x=>!x.deleted);
+      return sets.length===0 || sets.every(x=>x.done);
+    });
+    if(allDone){
+      if(current().screen==='sessionOverview' && nav.length>1) nav.pop();
+      const planForEnd = state.plans.find(p=>p.id===s.planId);
+      const stretchSecs = planForEnd ? (planForEnd.stretchSeconds===undefined?300:planForEnd.stretchSeconds) : 0;
+      if(stretchSecs>0) pushSwipe('sessionStretch');
+      else finishSession();
+      return;
+    }
     render();
   }, 'Remove');
 }
@@ -3621,6 +3715,20 @@ function openAddToSessionModal(){
     });
   }
   draw();
+}
+
+function cancelSession(){
+  flushSessionRunnerTimeouts();
+  stopRestTimer();
+  overviewUnlocked = false;
+  overviewEditingKey = null;
+  overviewOpenExIds = new Set();
+  lastLoggedExId = null;
+  if(phaseTimerRAF){ cancelAnimationFrame(phaseTimerRAF); phaseTimerRAF = null; }
+  phaseTimerEndTime = null; phaseTimerStarted = false;
+  state.activeSession = null;
+  saveState();
+  toHome();
 }
 
 function finishSession(){
