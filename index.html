@@ -3312,10 +3312,17 @@ function renderSessionRunner(){
 // Each set arrives as text like "27.5x6+4" (weight x reps). The sheet decides which exercises
 // are in a session, their order and the rest time. Set targets from the sheet are only applied
 // when that row changed in the sheet since the last sync, so progress made in the app isn't reset.
-async function syncSessionsFromSheet(url){
+// fetch that gives up after 30 seconds instead of hanging forever
+function fetchT(url, opts){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 30000);
+  return fetch(url, Object.assign({}, opts||{}, {signal:ctrl.signal})).finally(()=>clearTimeout(timer));
+}
+
+async function syncSessionsFromSheet(url, sheetNames){
   let data;
   try{
-    const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'type=sessions');
+    const res = await fetchT(url + (url.includes('?') ? '&' : '?') + 'type=sessions');
     data = await res.json();
   }catch(err){ return {error:true}; }
   if(!data || Array.isArray(data) || !Array.isArray(data.sessions)) return {unsupported:true};
@@ -3327,16 +3334,26 @@ async function syncSessionsFromSheet(url){
     if(isNaN(weight)) return null;
     return {weight, reps:m[2].replace(/\s+/g,'')};
   }
+  const norm = sets => sets.map(s=>`${s.weight}x${s.reps}`).join('|');
+  const sameList = (x,y)=>JSON.stringify(x)===JSON.stringify(y);
+  const stateOf = plan => JSON.stringify([plan.exerciseIds, plan.restSeconds||0, plan.exerciseIds.map(id=>norm(getBaseline(id)))]);
+  const commit = (plan)=>{
+    const sig = {};
+    plan.exerciseIds.forEach(id=>{ sig[id] = norm(getBaseline(id)); });
+    plan.sheetSig = sig;
+    plan.sheetStruct = {ids:[...plan.exerciseIds], rest:plan.restSeconds||0};
+  };
 
-  let added = 0, updated = 0;
+  let added = 0, updated = 0, conflicts = 0;
+  const toPush = [];                 // plans that must be written to the sheet
+  const inSheet = new Set();
+
   data.sessions.forEach(sess=>{
     const name = String(sess.name||'').trim();
     if(!name || !Array.isArray(sess.exercises) || sess.exercises.length===0) return;
-    const plan0 = state.plans.find(p=>p.name.toLowerCase()===name.toLowerCase());
-    const oldSig = (plan0 && plan0.sheetSig) || {};
-    const before = plan0 ? JSON.stringify([plan0.exerciseIds, plan0.restSeconds||0, oldSig]) : null;
-    const exerciseIds = [];
-    const sig = {};
+    inSheet.add(name.toLowerCase());
+
+    const rows = [];
     sess.exercises.forEach(row=>{
       const exName = String(row.name||'').trim();
       if(!exName) return;
@@ -3345,37 +3362,124 @@ async function syncSessionsFromSheet(url){
         ex = {id:uid(), name:exName, category:guessCategory(exName)};
         state.library.push(ex);
       }
-      if(exerciseIds.includes(ex.id)) return;
-      exerciseIds.push(ex.id);
-      const rawSets = (row.sets||[]).map(s=>String(s).trim()).filter(Boolean);
-      const rowSig = rawSets.join('|');
-      sig[ex.id] = rowSig;
-      const sets = rawSets.map(parseSheetSet).filter(Boolean);
-      const hasBaseline = !!state.baselines[ex.id];
-      if(sets.length>0 && (!hasBaseline || oldSig[ex.id] !== rowSig)){
-        state.baselines[ex.id] = sets;
-      } else if(!hasBaseline){
-        state.baselines[ex.id] = [{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}];
-      }
+      if(rows.some(r=>r.ex.id===ex.id)) return;
+      const sets = (row.sets||[]).map(parseSheetSet).filter(Boolean);
+      rows.push({ex, sets, sheetNorm:norm(sets)});
     });
-    if(exerciseIds.length===0) return;
-    const pushCount = exerciseIds.filter(id=>{ const e=getEx(id); return e && e.category==='empujar'; }).length;
-    const category = (exerciseIds.length-pushCount) > pushCount ? 'tirar' : 'empujar';
-    const rest = parseInt(sess.rest,10) || 0;
-    let plan = plan0;
-    if(!plan){
-      plan = {id:uid(), name, category, exerciseIds:[], createdAt:new Date().toISOString()};
+    if(rows.length===0) return;
+    const sheetIds = rows.map(r=>r.ex.id);
+    const sheetRest = parseInt(sess.rest,10) || 0;
+
+    let plan = state.plans.find(p=>p.name.toLowerCase()===name.toLowerCase());
+    const isNew = !plan;
+    if(isNew){
+      plan = {id:uid(), name, category:'empujar', exerciseIds:[], createdAt:new Date().toISOString()};
       state.plans.push(plan);
       added++;
     }
-    plan.category = category;
-    plan.exerciseIds = exerciseIds;
-    if(rest) plan.restSeconds = rest;
-    else if(plan.restSeconds === undefined) plan.restSeconds = 90;
-    plan.sheetSig = sig;
-    if(before !== null && before !== JSON.stringify([plan.exerciseIds, plan.restSeconds||0, plan.sheetSig])) updated++;
+    const before = isNew ? null : stateOf(plan);
+    const last = plan.sheetStruct || null;           // what the sheet and the app agreed on last time
+    const lastSig = plan.sheetSig || {};
+    let pushNeeded = false;
+
+    // which exercises, in which order
+    let finalIds;
+    if(!last){
+      finalIds = sheetIds;                           // first time we see this session: the sheet wins
+    } else {
+      const sheetChanged = !sameList(sheetIds, last.ids);
+      const appChanged = !sameList(plan.exerciseIds, last.ids);
+      if(sheetChanged){
+        finalIds = sheetIds;
+        if(appChanged && !sameList(sheetIds, plan.exerciseIds)) conflicts++;
+      } else if(appChanged){
+        finalIds = plan.exerciseIds.filter(id=>getEx(id));
+        pushNeeded = true;
+      } else {
+        finalIds = sheetIds;
+      }
+    }
+
+    // rest time
+    let finalRest;
+    const lastRest = last ? last.rest : null;
+    if(sheetRest > 0 && sheetRest !== lastRest) finalRest = sheetRest;            // sheet changed it
+    else if(last && (plan.restSeconds||0) !== lastRest){ finalRest = plan.restSeconds||0; pushNeeded = true; } // app changed it
+    else if(plan.restSeconds !== undefined) finalRest = plan.restSeconds;
+    else finalRest = sheetRest || 90;
+
+    // set targets, exercise by exercise
+    finalIds.forEach(id=>{
+      const row = rows.find(r=>r.ex.id===id);
+      const hasBaseline = !!state.baselines[id];
+      const appNorm = hasBaseline ? norm(getBaseline(id)) : null;
+      const lastNorm = lastSig[id];
+      if(!row){ if(!hasBaseline) state.baselines[id] = [{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}]; return; }
+      const sheetChanged = row.sets.length>0 && row.sheetNorm !== lastNorm;
+      const appChanged = hasBaseline && appNorm !== lastNorm;
+      if(sheetChanged){
+        state.baselines[id] = row.sets;
+        if(lastNorm !== undefined && appChanged && appNorm !== row.sheetNorm) conflicts++;
+      } else if(appChanged && lastNorm !== undefined){
+        pushNeeded = true;
+      } else if(!hasBaseline){
+        state.baselines[id] = [{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}];
+      }
+    });
+
+    const pushCount = finalIds.filter(id=>{ const e=getEx(id); return e && e.category==='empujar'; }).length;
+    plan.category = (finalIds.length-pushCount) > pushCount ? 'tirar' : 'empujar';
+    plan.exerciseIds = finalIds;
+    plan.restSeconds = finalRest;
+    if(before !== null && before !== stateOf(plan)) updated++;
+
+    if(pushNeeded) toPush.push({plan, mode:'replace'});
+    else commit(plan);
   });
-  return {added, updated};
+
+  // sessions that only exist in the app
+  state.plans.forEach(plan=>{
+    if(inSheet.has(plan.name.toLowerCase())) return;
+    if(!plan.exerciseIds.some(id=>getEx(id))) return;
+    toPush.push({plan, mode:'add'});
+  });
+
+  // exercises the sheet doesn't know yet
+  const usedIds = new Set();
+  state.plans.forEach(p=>p.exerciseIds.forEach(id=>usedIds.add(id)));
+  const starterNames = new Set(DEFAULT_LIBRARY.map(e=>e.name.toLowerCase()));
+  const newExercises = state.library
+    .filter(e=>!(e.aliases && e.aliases.length))
+    .filter(e=>!starterNames.has(e.name.toLowerCase()) || usedIds.has(e.id))
+    .filter(e=>!sheetNames || !sheetNames.has(e.name.toLowerCase()))
+    .map(e=>({name:e.name, category:e.category, bodyPart:e.bodyPart||''}));
+
+  const result = {added, updated, conflicts, pushed:0, exercisesPushed:0};
+  if(toPush.length===0 && newExercises.length===0) return result;
+
+  const payload = {
+    type:'push',
+    exercises:newExercises,
+    sessions:toPush.map(({plan,mode})=>({
+      name:plan.name, rest:plan.restSeconds||0, mode,
+      exercises:plan.exerciseIds.filter(id=>getEx(id)).map(id=>({name:getEx(id).name, sets:getBaseline(id).map(s=>`${s.weight}x${s.reps}`)})),
+    })),
+  };
+  let resp;
+  try{
+    const res = await fetchT(url, {method:'POST', body:JSON.stringify(payload)});
+    resp = await res.json();
+  }catch(err){ result.pushError = 'failed'; return result; }
+  if(!resp || resp.error || !Array.isArray(resp.addedSessions) || !Array.isArray(resp.replacedSessions)){
+    result.pushError = 'unsupported';
+    return result;
+  }
+  const done = new Set([...resp.addedSessions, ...resp.replacedSessions].map(n=>String(n).toLowerCase()));
+  toPush.forEach(({plan})=>{
+    if(done.has(plan.name.toLowerCase())){ commit(plan); result.pushed++; }
+  });
+  result.exercisesPushed = resp.exercisesAdded || 0;
+  return result;
 }
 
 // Loads the big exercise list from the sheet's "all" tab. Kept separate from your own exercises;
@@ -3383,7 +3487,7 @@ async function syncSessionsFromSheet(url){
 async function syncCatalogFromSheet(url){
   let data;
   try{
-    const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'type=catalog');
+    const res = await fetchT(url + (url.includes('?') ? '&' : '?') + 'type=catalog');
     data = await res.json();
   }catch(err){ return {error:true}; }
   if(!data || Array.isArray(data) || !Array.isArray(data.catalog)) return {unsupported:true};
@@ -3404,46 +3508,12 @@ async function syncCatalogFromSheet(url){
   return {count:list.length};
 }
 
-// Sends the plans (and any exercises the sheet doesn't have yet) from this phone to the sheet.
-// Append-only: sessions/exercises already in the sheet are never overwritten.
-async function pushPlansToSheet(url){
-  const sig = {};
-  const sessions = state.plans.map(plan=>{
-    const rows = [];
-    plan.exerciseIds.forEach(id=>{
-      const ex = getEx(id);
-      if(!ex) return;
-      const sets = getBaseline(id).map(s=>`${s.weight}x${s.reps}`);
-      rows.push({name:ex.name, sets, id});
-    });
-    sig[plan.name.toLowerCase()] = Object.fromEntries(rows.map(r=>[r.id, r.sets.join('|')]));
-    return {name:plan.name, rest:plan.restSeconds||0, exercises:rows.map(r=>({name:r.name, sets:r.sets}))};
-  });
-  const usedIds = new Set();
-  state.plans.forEach(p=>p.exerciseIds.forEach(id=>usedIds.add(id)));
-  const starterNames = new Set(DEFAULT_LIBRARY.map(e=>e.name.toLowerCase()));
-  const exercises = state.library
-    .filter(e=>!(e.aliases && e.aliases.length))
-    .filter(e=>!starterNames.has(e.name.toLowerCase()) || usedIds.has(e.id))
-    .map(e=>({name:e.name, category:e.category, bodyPart:e.bodyPart||''}));
-  let data;
-  try{
-    const res = await fetch(url, {method:'POST', body:JSON.stringify({type:'push', exercises, sessions})});
-    data = await res.json();
-  }catch(err){ return {unconfirmed:true}; }
-  if(!data || data.error || !Array.isArray(data.addedSessions)) return {unsupported:true};
-  data.addedSessions.forEach(n=>{
-    const plan = state.plans.find(p=>p.name.toLowerCase()===String(n).toLowerCase());
-    if(plan) plan.sheetSig = sig[plan.name.toLowerCase()];
-  });
-  saveState();
-  return {sessionsAdded:data.addedSessions.length, sessionsSkipped:(data.skippedSessions||[]).length, exercisesAdded:data.exercisesAdded||0};
-}
-
-// Sends the workout history (Training Log) to the sheet's "history" tab. Append-only.
+// Sends workouts that haven't been sent yet to the sheet's "history" tab. Append-only.
 async function pushHistoryToSheet(url){
+  const unsent = state.sessions.filter(s=>!s.sentToSheet);
+  if(unsent.length===0) return {empty:true};
   const pad = n=>String(n).padStart(2,'0');
-  const history = state.sessions.slice().reverse().map(s=>{
+  const history = unsent.slice().reverse().map(s=>{
     const d = new Date(s.date);
     const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     return {
@@ -3453,13 +3523,13 @@ async function pushHistoryToSheet(url){
       exercises: s.exercises.map(e=>({name:e.name, sets:e.sets.map(x=>`${x.weight}x${x.reps}`)})),
     };
   });
-  if(history.length===0) return {empty:true};
   let data;
   try{
-    const res = await fetch(url, {method:'POST', body:JSON.stringify({type:'history', history})});
+    const res = await fetchT(url, {method:'POST', body:JSON.stringify({type:'history', history})});
     data = await res.json();
   }catch(err){ return {unconfirmed:true}; }
   if(!data || data.error || typeof data.added !== 'number') return {unsupported:true};
+  unsent.forEach(s=>{ s.sentToSheet = true; });
   return {added:data.added, skipped:data.skipped||0};
 }
 
@@ -3470,46 +3540,13 @@ function openSheetSyncModal(){
     <div class="modal-card">
       <div class="field-label">Google Sheet sync</div>
       <input type="text" class="namefield" style="margin:0 0 10px 0;width:100%" id="sheetUrlInput" placeholder="Paste your Apps Script Web App URL" value="${state.sheetSyncUrl||''}">
-      <div class="sub" style="margin-bottom:14px">Reads Name (col A), Category (col B: empujar/tirar), and Body Part (col C, e.g. Chest/Back/Legs) from your sheet, skipping the header row. Also reads your "sessions" tab, if you have one, to build or update plans.</div>
+      <div class="sub" style="margin-bottom:14px">Keeps your exercises, plans and workout history in step with your sheet, both ways.</div>
       <button class="btn primary btn-press" id="syncNowBtn" style="margin-bottom:8px">Sync now</button>
-      <button class="btn ghost btn-press" id="pushSheetBtn" style="margin-bottom:8px">Send my plans to sheet</button>
-      <button class="btn ghost btn-press" id="pushHistoryBtn" style="margin-bottom:8px">Send workout history to sheet</button>
-      <button class="btn ghost btn-press" id="removeStartersBtn" style="margin-bottom:8px;color:var(--danger)">Remove starter exercises</button>
       <button class="btn ghost btn-press" id="closeSyncBtn">Close</button>
+      <button id="removeStartersBtn" style="display:block;margin:14px auto 0;background:none;border:none;color:var(--text-faint);font-size:12px;text-decoration:underline;padding:6px;">Remove starter exercises</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeSyncBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
-  overlay.querySelector('#pushSheetBtn').addEventListener('click', async ()=>{
-    const url = overlay.querySelector('#sheetUrlInput').value.trim();
-    if(!url) return;
-    state.sheetSyncUrl = url;
-    saveState();
-    const btn = overlay.querySelector('#pushSheetBtn');
-    btn.textContent = 'Sending…';
-    btn.disabled = true;
-    const r = await pushPlansToSheet(url);
-    btn.textContent = 'Send my plans to sheet';
-    btn.disabled = false;
-    if(r.unsupported) openAlert('The sheet did not accept it. Add the "send" code to your Apps Script and deploy a new version.');
-    else if(r.unconfirmed) openAlert('Sent, but no confirmation came back. Check your sessions tab to see if it arrived.');
-    else openAlert(`Sent: ${r.sessionsAdded} session${r.sessionsAdded===1?'':'s'} added to the sheet, ${r.sessionsSkipped} already there, ${r.exercisesAdded} new exercise${r.exercisesAdded===1?'':'s'}.`);
-  });
-  overlay.querySelector('#pushHistoryBtn').addEventListener('click', async ()=>{
-    const url = overlay.querySelector('#sheetUrlInput').value.trim();
-    if(!url) return;
-    state.sheetSyncUrl = url;
-    saveState();
-    const btn = overlay.querySelector('#pushHistoryBtn');
-    btn.textContent = 'Sending…';
-    btn.disabled = true;
-    const r = await pushHistoryToSheet(url);
-    btn.textContent = 'Send workout history to sheet';
-    btn.disabled = false;
-    if(r.empty) openAlert('No finished workouts to send yet.');
-    else if(r.unsupported) openAlert('The sheet did not accept it. Add the history code to your Apps Script and deploy a new version.');
-    else if(r.unconfirmed) openAlert('Sent, but no confirmation came back. Check your history tab to see if it arrived.');
-    else openAlert(`Sent: ${r.added} workout${r.added===1?'':'s'} added to the sheet, ${r.skipped} already there.`);
-  });
   overlay.querySelector('#removeStartersBtn').addEventListener('click', ()=>{
     openConfirm('Remove the built-in starter exercises? Only ones you added yourself (including via Sheet sync) will remain.', ()=>{
       const starterNames = new Set(DEFAULT_LIBRARY.map(e=>e.name.toLowerCase()));
@@ -3533,7 +3570,7 @@ function openSheetSyncModal(){
     btn.textContent = 'Syncing…';
     btn.disabled = true;
     try{
-      const res = await fetch(url);
+      const res = await fetchT(url);
       const data = await res.json();
       let added = 0, updated = 0;
       data.forEach(row=>{
@@ -3557,21 +3594,33 @@ function openSheetSyncModal(){
           added++;
         }
       });
-      const sessRes = await syncSessionsFromSheet(url);
+      const sheetNames = new Set(data.map(r=>String(r.name||'').trim().toLowerCase()).filter(Boolean));
+      const sessRes = await syncSessionsFromSheet(url, sheetNames);
       const catRes = await syncCatalogFromSheet(url);
+      const histRes = await pushHistoryToSheet(url);
       saveState();
       document.body.removeChild(overlay);
-      let msg = `Synced: ${added} added, ${updated} updated.`;
-      if(!sessRes.unsupported && !sessRes.error) msg += ` Sessions: ${sessRes.added} added, ${sessRes.updated} updated.`;
-      if(!catRes.unsupported && !catRes.error) msg += ` Exercise list: ${catRes.count} available to search.`;
-      if(sessRes.unsupported || catRes.unsupported) msg += ' Update your Apps Script to sync sessions and the exercise list.';
-      else if(sessRes.error || catRes.error) msg += ' Some of it could not be read.';
+      const bits = [];
+      if(added || updated) bits.push(`Exercises: ${added} new, ${updated} updated`);
+      if(!sessRes.unsupported && !sessRes.error){
+        if(sessRes.added || sessRes.updated) bits.push(`Plans from the sheet: ${sessRes.added} new, ${sessRes.updated} updated`);
+        if(sessRes.pushed || sessRes.exercisesPushed) bits.push(`Sent to the sheet: ${sessRes.pushed} plan${sessRes.pushed===1?'':'s'}, ${sessRes.exercisesPushed} new exercise${sessRes.exercisesPushed===1?'':'s'}`);
+      }
+      if(histRes.added) bits.push(`${histRes.added} workout${histRes.added===1?'':'s'} sent to the sheet`);
+      if(!catRes.unsupported && !catRes.error) bits.push(`${catRes.count} exercises to search`);
+      let msg = bits.length ? 'Synced. ' + bits.join('. ') + '.' : 'Synced. Everything is up to date.';
+      if(!sessRes.unsupported && !sessRes.error && sessRes.conflicts) msg += ` ${sessRes.conflicts} change${sessRes.conflicts===1?' was':'s were'} made in both places, so the sheet's version was kept.`;
+      if(sessRes.pushError==='failed') msg += ' Changes could not be sent to the sheet this time.';
+      if(sessRes.unsupported || catRes.unsupported || sessRes.pushError==='unsupported' || histRes.unsupported) msg += ' Update your Apps Script to get the full sync.';
+      else if(sessRes.error || catRes.error || histRes.unconfirmed) msg += ' Part of it could not be read.';
       openAlert(msg);
       render();
     }catch(err){
       btn.textContent = 'Sync now';
       btn.disabled = false;
-      openAlert('Could not sync. Check the URL and that the sheet is published correctly.');
+      openAlert(err && err.name==='AbortError'
+        ? 'The sheet took too long to answer. Check your connection and the link, then try again.'
+        : 'Could not sync. Check the link and that the script is deployed.');
     }
   });
 }
