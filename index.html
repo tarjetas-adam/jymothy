@@ -162,6 +162,7 @@ h1.hero{
   border-radius:var(--radius) 0 0 var(--radius);
 }
 .menu-slot.pull::before{background:var(--pull);}
+.menu-slot.reorderable{touch-action:none;user-select:none;-webkit-user-select:none;}
 .menu-slot.slot-dim{filter:blur(3px);opacity:.35;}
 .menu-slot .card.menu{
   margin:0;width:100%;
@@ -1372,10 +1373,13 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
         updateTargetFromPointer(ev.clientY - floatOffsetY + itemHeight/2);
         if(!autoScrollRAF) autoScrollRAF = requestAnimationFrame(autoScrollTick);
       }
-      function onUp(ev){
+      function onUp(ev){ finish(false); }
+      function onCancel(ev){ finish(true); }
+      function finish(cancelled){
         clearTimeout(timer);
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onCancel);
         if(autoScrollRAF){ cancelAnimationFrame(autoScrollRAF); autoScrollRAF=null; }
         if(dragging){
           item.style.position = '';
@@ -1388,7 +1392,7 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
           item.style.transition = '';
           placeholder.parentNode.insertBefore(item, placeholder);
           placeholder.remove();
-          container.insertBefore(item, siblings[targetIndex] || null);
+          if(!cancelled) container.insertBefore(item, siblings[targetIndex] || null);
           siblings.forEach(sib=>{
             sib.style.transition = 'transform .18s ease';
             sib.style.transform = '';
@@ -1396,14 +1400,18 @@ function makeReorderable(container, itemSelector, {onReorder,onTap,topInset,bott
           setTimeout(()=>{
             item.classList.remove('dragging');
           }, 180);
-          const ids = [...container.querySelectorAll(itemSelector)].map(it=>it.dataset.id);
-          onReorder && onReorder(ids);
-        } else if(!moved && !isNodragTarget){
+          dragging = false;
+          if(!cancelled){
+            const ids = [...container.querySelectorAll(itemSelector)].map(it=>it.dataset.id);
+            onReorder && onReorder(ids);
+          }
+        } else if(!cancelled && !moved && !isNodragTarget){
           onTap && onTap(item.dataset.id);
         }
       }
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onCancel);
     });
   });
 }
@@ -1451,6 +1459,7 @@ function render(){
   const isSessionTheme = sessionScreens.includes(screen) && !!state.activeSession;
   document.body.classList.toggle('session-theme', isSessionTheme);
   document.documentElement.classList.toggle('session-theme', isSessionTheme);
+  document.querySelectorAll('body > .dragging').forEach(el=>el.remove());
   app.innerHTML = "";
   (renderers[screen]||renderHome)(params||{});
   requestAnimationFrame(adjustFixedBottomForViewport);
@@ -1583,7 +1592,7 @@ function renderPlanList(){
     state.plans.forEach(p=>{
       const cat = p.category==='empujar'?'push':'pull';
       const slot = document.createElement('div');
-      slot.className = `menu-slot ${cat}`;
+      slot.className = `menu-slot reorderable ${cat}`;
       slot.dataset.id = p.id;
       const el = document.createElement('div');
       el.className = `card menu ${cat}`;
