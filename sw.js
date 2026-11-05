@@ -1,4 +1,4 @@
-const CACHE = 'jymothy-v1';
+const CACHE = 'jymothy-v2';
 const ASSETS = [
   '/jymothy/',
   '/jymothy/index.html',
@@ -44,7 +44,9 @@ self.addEventListener('fetch', e => {
 
   if (isAppShell) {
     e.respondWith(
-      fetch(req).then(res => {
+      // cache: 'no-store' skips the browser's own 10-minute copy (GitHub Pages allows one),
+      // so a freshly uploaded index.html shows up on the very next open.
+      fetch(req.url, { cache: 'no-store' }).then(res => {
         if (res && res.status === 200) {
           const clone = res.clone();
           caches.open(CACHE).then(c => c.put('/jymothy/index.html', clone));
