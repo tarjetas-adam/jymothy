@@ -858,6 +858,34 @@ async function saveState(){
 
 // ---------- helpers ----------
 function getEx(id){ return state.library.find(e=>e.id===id); }
+function findExByName(name){
+  const n = String(name).trim().toLowerCase();
+  return state.library.find(e=>e.name.toLowerCase()===n || (e.aliases||[]).some(a=>a.toLowerCase()===n));
+}
+function exerciseTokens(q){ return String(q||'').toLowerCase().split(/\s+/).filter(Boolean); }
+function exMatchesQuery(name, tokens){ const n = String(name).toLowerCase(); return tokens.every(t=>n.includes(t)); }
+function exMatchesAny(ex, tokens){ return !tokens.length || exMatchesQuery(ex.name, tokens) || (ex.aliases||[]).some(a=>exMatchesQuery(a, tokens)); }
+// Exercises from the sheet's "all" tab that are not in the library yet and match what was typed.
+function catalogMatches(query, category){
+  const tokens = exerciseTokens(query);
+  if(!tokens.length || !state.catalog) return [];
+  const out = [];
+  for(const item of state.catalog){
+    if(category && item.c !== category) continue;
+    if(!exMatchesQuery(item.n, tokens)) continue;
+    if(findExByName(item.n)) continue;
+    out.push(item);
+    if(out.length>=40) break;
+  }
+  return out;
+}
+function addCatalogExercise(item){
+  const ex = {id:uid(), name:item.n, category:item.c};
+  if(item.b) ex.bodyPart = item.b;
+  state.library.push(ex);
+  state.baselines[ex.id] = [{weight:20,reps:"10"},{weight:20,reps:"10"},{weight:20,reps:"10"}];
+  return ex;
+}
 function guessBodyPart(ex){
   if(ex.bodyPart) return ex.bodyPart;
   const n = ex.name.toLowerCase();
@@ -1630,35 +1658,80 @@ function renderPlanNewExercises(){
   scrollArea.style.webkitOverflowScrolling = 'touch';
   pageWrap.appendChild(scrollArea);
 
-  const grouped = groupByBodyPart(state.library);
-  grouped.forEach(({part, exercises})=>{
-    const lbl = document.createElement('div');
-    lbl.className = 'section-label';
-    lbl.textContent = part;
-    lbl.style.scrollSnapAlign = 'start';
-    lbl.style.scrollSnapStop = 'always';
-    scrollArea.appendChild(lbl);
-    exercises.forEach(ex=>{
-      const row = document.createElement('div');
-      const sel = wizard.selected.includes(ex.id);
-      row.className = `list-row ${sel?'selected':''}`;
-      row.innerHTML = `<div class="name">${ex.name}</div>`;
-      row.addEventListener('click', ()=>{
-        const i = wizard.selected.indexOf(ex.id);
-        if(i>=0) wizard.selected.splice(i,1); else wizard.selected.push(ex.id);
-        row.classList.toggle('selected');
-        row.classList.remove('row-pop');
-        row.offsetWidth;
-        row.classList.add('row-pop');
-        const nextBtn = document.getElementById('nextBtn');
-        if(nextBtn){
-          nextBtn.textContent = `Next (${wizard.selected.length})`;
-          nextBtn.disabled = wizard.selected.length===0;
-        }
+  const searchRow = document.createElement('div');
+  searchRow.className = 'addrow';
+  searchRow.style.margin = '0 24px 10px';
+  searchRow.style.flexShrink = '0';
+  searchRow.innerHTML = `<input type="text" id="exSearchNew" placeholder="Search all exercises…">`;
+  pageWrap.insertBefore(searchRow, scrollArea);
+  const searchEl = searchRow.querySelector('#exSearchNew');
+  let query = '';
+
+  function updateNextBtn(){
+    const nextBtn = document.getElementById('nextBtn');
+    if(nextBtn){
+      nextBtn.textContent = `Next (${wizard.selected.length})`;
+      nextBtn.disabled = wizard.selected.length===0;
+    }
+  }
+  function drawList(){
+    scrollArea.innerHTML = '';
+    const tokens = exerciseTokens(query);
+    const shown = state.library.filter(e=>exMatchesAny(e, tokens));
+    groupByBodyPart(shown).forEach(({part, exercises})=>{
+      const lbl = document.createElement('div');
+      lbl.className = 'section-label';
+      lbl.textContent = part;
+      lbl.style.scrollSnapAlign = 'start';
+      lbl.style.scrollSnapStop = 'always';
+      scrollArea.appendChild(lbl);
+      exercises.forEach(ex=>{
+        const row = document.createElement('div');
+        const sel = wizard.selected.includes(ex.id);
+        row.className = `list-row ${sel?'selected':''}`;
+        row.innerHTML = `<div class="name">${ex.name}</div>`;
+        row.addEventListener('click', ()=>{
+          const i = wizard.selected.indexOf(ex.id);
+          if(i>=0) wizard.selected.splice(i,1); else wizard.selected.push(ex.id);
+          row.classList.toggle('selected');
+          row.classList.remove('row-pop');
+          row.offsetWidth;
+          row.classList.add('row-pop');
+          updateNextBtn();
+        });
+        scrollArea.appendChild(row);
       });
-      scrollArea.appendChild(row);
     });
-  });
+    const fromCatalog = query.trim().length>=2 ? catalogMatches(query, null) : [];
+    if(fromCatalog.length){
+      const lbl = document.createElement('div');
+      lbl.className = 'section-label';
+      lbl.textContent = 'More exercises';
+      scrollArea.appendChild(lbl);
+      fromCatalog.forEach(item=>{
+        const row = document.createElement('div');
+        row.className = 'list-row';
+        row.innerHTML = `<div class="name">${item.n}</div>`;
+        row.addEventListener('click', ()=>{
+          const ex = addCatalogExercise(item);
+          wizard.selected.push(ex.id);
+          saveState();
+          query = '';
+          searchEl.value = '';
+          drawList();
+          updateNextBtn();
+        });
+        scrollArea.appendChild(row);
+      });
+    }
+    if(query.trim() && shown.length===0 && fromCatalog.length===0){
+      scrollArea.innerHTML = `<div class="empty">No match</div>`;
+    }
+    const first = scrollArea.querySelector('.list-row');
+    if(first) first.style.marginTop = '0';
+  }
+  drawList();
+  searchEl.addEventListener('input', ()=>{ query = searchEl.value; drawList(); });
 
   const firstRow = scrollArea.querySelector('.list-row');
   if(firstRow) firstRow.style.marginTop = '0';
@@ -1876,6 +1949,43 @@ function openRenamePlanModal(plan){
   });
 }
 
+function openRenameExerciseModal(ex){
+  const overlay = document.createElement('div');
+  overlay.className='modal-overlay modal-center';
+  const pullCls = ex.category==='tirar' ? 'pull' : '';
+  overlay.innerHTML = `
+    <div class="modal-card modal-card-smooth" style="position:relative">
+      <button class="iconbtn btn-press" id="cancelRenameExBtn" style="position:absolute;top:10px;right:10px;font-size:15px">✕</button>
+      <div class="field-label">Rename exercise</div>
+      <input type="text" class="namefield" style="margin:0 0 14px 0;width:100%" id="renameExInput">
+      <button class="btn primary btn-press ${pullCls}" id="saveRenameExBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#renameExInput');
+  input.value = ex.name;
+  input.focus();
+  input.select();
+  overlay.querySelector('#cancelRenameExBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
+  overlay.querySelector('#saveRenameExBtn').addEventListener('click', ()=>{
+    const name = input.value.trim();
+    if(!name || name === ex.name){ document.body.removeChild(overlay); return; }
+    const clash = findExByName(name);
+    if(clash && clash.id !== ex.id){
+      document.body.removeChild(overlay);
+      openAlert('You already have an exercise with that name.');
+      return;
+    }
+    // keep the old name so a sync from the sheet still recognises this exercise
+    const old = ex.name;
+    ex.aliases = [...(ex.aliases||[]).filter(a=>a.toLowerCase()!==old.toLowerCase()), old];
+    ex.name = name;
+    state.sessions.forEach(s=>s.exercises.forEach(e=>{ if(e.exerciseId===ex.id) e.name = name; }));
+    saveState();
+    document.body.removeChild(overlay);
+    render();
+  });
+}
+
 function guessCategory(name){
   const fakeEx = {name, category:'empujar'};
   const part = guessBodyPart(fakeEx);
@@ -1993,7 +2103,7 @@ function openImportRoutineModal(){
     }
     const exerciseIds = [];
     exerciseLines.forEach(line=>{
-      let existing = state.library.find(e=>e.name.toLowerCase()===line.name.toLowerCase());
+      let existing = findExByName(line.name);
       if(!existing){
         existing = {id:uid(), name:line.name, category:guessCategory(line.name)};
         state.library.push(existing);
@@ -2178,6 +2288,7 @@ function renderPlanExEditBody(ex, exId, plan, cat){
   return `<div class="sx-planedit nodrag">
     <div style="margin-top:2px;">${setsHTML}</div>
     <button class="btn ghost small nodrag btn-press" data-addset="${exId}" style="width:100%;margin-top:8px;">+ Add set</button>
+    <button class="btn ghost small nodrag btn-press" data-renameex="${exId}" style="width:100%;margin-top:8px;">Rename exercise</button>
     <button class="btn ghost small nodrag btn-press" data-removeex="${exId}" style="width:100%;margin-top:14px;color:var(--danger)">Remove from plan</button>
   </div>`;
 }
@@ -2266,6 +2377,12 @@ function bindPlanExEditBody(list, plan){
       saveState(); render();
     });
   });
+  list.querySelectorAll('[data-renameex]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const ex = getEx(btn.dataset.renameex);
+      if(ex) openRenameExerciseModal(ex);
+    });
+  });
   list.querySelectorAll('[data-removeex]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const exId = btn.dataset.removeex;
@@ -2298,6 +2415,7 @@ function bindPlanExEditBody(list, plan){
 
 function openAddExercisesModal(plan){
   const localSel = [];
+  let query = '';
   let modalScrollRestore = null;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-center';
@@ -2312,16 +2430,27 @@ function openAddExercisesModal(plan){
     sheet.innerHTML = `
       <div class="topbar" style="padding-top:18px"><span class="title">Add exercises</span><button class="iconbtn btn-press" id="closeAddEx">✕</button></div>
       <div class="hero-mini px"><div class="t">${catLabel(plan.category)}</div></div>
+      <div class="addrow" style="margin:10px 24px 6px"><input type="text" id="exSearchModal" placeholder="Search all exercises…"></div>
       <div id="addExList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;overscroll-behavior:contain;max-height:50vh;"></div>
       <div class="addrow"><input type="text" id="newExNameModal" placeholder="+ Add new exercise…"><button class="btn ghost small btn-press" id="addExBtnModal">Add</button></div>
       <div class="btn-row"><button class="btn primary btn-press ${pullCls}" id="addSaveBtnModal" ${localSel.length===0?'disabled':''}>Add to plan (${localSel.length})</button></div>
     `;
     const listEl = sheet.querySelector('#addExList');
-    if(available.length===0){
-      listEl.innerHTML = `<div class="empty"><div class="big">All added already</div>Every exercise in this category is already in the plan.</div>`;
-    } else {
-      const grouped = groupByBodyPart(available);
-      grouped.forEach(({part, exercises})=>{
+    const searchEl = sheet.querySelector('#exSearchModal');
+    searchEl.value = query;
+
+    function fillList(initial){
+      listEl.innerHTML = '';
+      const tokens = exerciseTokens(query);
+      const shown = available.filter(e=>exMatchesAny(e, tokens));
+      const fromCatalog = query.trim().length>=2 ? catalogMatches(query, plan.category) : [];
+      if(shown.length===0 && fromCatalog.length===0){
+        listEl.innerHTML = query.trim()
+          ? `<div class="empty">No match</div>`
+          : `<div class="empty"><div class="big">All added already</div>Every exercise in this category is already in the plan.</div>`;
+        return;
+      }
+      groupByBodyPart(shown).forEach(({part, exercises})=>{
         const lbl = document.createElement('div');
         lbl.className = 'section-label';
         lbl.textContent = part;
@@ -2343,16 +2472,42 @@ function openAddExercisesModal(plan){
           listEl.appendChild(row);
         });
       });
+      if(fromCatalog.length){
+        const lbl = document.createElement('div');
+        lbl.className = 'section-label';
+        lbl.textContent = 'More exercises';
+        listEl.appendChild(lbl);
+        fromCatalog.forEach(item=>{
+          const row = document.createElement('div');
+          row.className = `list-row btn-press ${pullCls}`;
+          row.innerHTML = `<div class="name">${item.n}</div>`;
+          row.addEventListener('click', ()=>{
+            const ex = addCatalogExercise(item);
+            localSel.push(ex.id);
+            saveState();
+            query = '';
+            draw();
+          });
+          listEl.appendChild(row);
+        });
+      }
       justToggledExId = null;
       const firstRow = listEl.querySelector('.list-row');
       if(firstRow) firstRow.style.marginTop = '0';
-      attachSlowSnapScroll(listEl, '.list-row', 6);
-      if(modalScrollRestore !== null){
-        const restoreY = modalScrollRestore;
-        modalScrollRestore = null;
-        requestAnimationFrame(()=>{ listEl.scrollTop = restoreY; });
+      if(initial){
+        attachSlowSnapScroll(listEl, '.list-row', 6);
+        if(modalScrollRestore !== null){
+          const restoreY = modalScrollRestore;
+          modalScrollRestore = null;
+          requestAnimationFrame(()=>{ listEl.scrollTop = restoreY; });
+        }
+      } else {
+        listEl.style.scrollSnapType = 'none';
       }
     }
+    fillList(true);
+    searchEl.addEventListener('input', ()=>{ query = searchEl.value; fillList(false); });
+
     sheet.querySelector('#closeAddEx').addEventListener('click', ()=>document.body.removeChild(overlay));
     sheet.querySelector('#addExBtnModal').addEventListener('click', ()=>{
       const input = sheet.querySelector('#newExNameModal');
@@ -3185,7 +3340,7 @@ async function syncSessionsFromSheet(url){
     sess.exercises.forEach(row=>{
       const exName = String(row.name||'').trim();
       if(!exName) return;
-      let ex = state.library.find(e=>e.name.toLowerCase()===exName.toLowerCase());
+      let ex = findExByName(exName);
       if(!ex){
         ex = {id:uid(), name:exName, category:guessCategory(exName)};
         state.library.push(ex);
@@ -3216,10 +3371,96 @@ async function syncSessionsFromSheet(url){
     plan.category = category;
     plan.exerciseIds = exerciseIds;
     if(rest) plan.restSeconds = rest;
+    else if(plan.restSeconds === undefined) plan.restSeconds = 90;
     plan.sheetSig = sig;
     if(before !== null && before !== JSON.stringify([plan.exerciseIds, plan.restSeconds||0, plan.sheetSig])) updated++;
   });
   return {added, updated};
+}
+
+// Loads the big exercise list from the sheet's "all" tab. Kept separate from your own exercises;
+// an exercise only joins your list when you pick it in the search.
+async function syncCatalogFromSheet(url){
+  let data;
+  try{
+    const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'type=catalog');
+    data = await res.json();
+  }catch(err){ return {error:true}; }
+  if(!data || Array.isArray(data) || !Array.isArray(data.catalog)) return {unsupported:true};
+  const seen = new Set();
+  const list = [];
+  data.catalog.forEach(r=>{
+    const name = String(r.name||'').trim();
+    if(!name) return;
+    const key = name.toLowerCase();
+    if(seen.has(key)) return;
+    seen.add(key);
+    const pp = String(r.pushPull||'').trim().toLowerCase();
+    const category = pp.startsWith('pull') ? 'tirar' : pp.startsWith('push') ? 'empujar' : guessCategory(name);
+    const part = String(r.bodyPart||'').trim();
+    list.push({n:name, c:category, b: part ? part.charAt(0).toUpperCase()+part.slice(1).toLowerCase() : ''});
+  });
+  state.catalog = list;
+  return {count:list.length};
+}
+
+// Sends the plans (and any exercises the sheet doesn't have yet) from this phone to the sheet.
+// Append-only: sessions/exercises already in the sheet are never overwritten.
+async function pushPlansToSheet(url){
+  const sig = {};
+  const sessions = state.plans.map(plan=>{
+    const rows = [];
+    plan.exerciseIds.forEach(id=>{
+      const ex = getEx(id);
+      if(!ex) return;
+      const sets = getBaseline(id).map(s=>`${s.weight}x${s.reps}`);
+      rows.push({name:ex.name, sets, id});
+    });
+    sig[plan.name.toLowerCase()] = Object.fromEntries(rows.map(r=>[r.id, r.sets.join('|')]));
+    return {name:plan.name, rest:plan.restSeconds||0, exercises:rows.map(r=>({name:r.name, sets:r.sets}))};
+  });
+  const usedIds = new Set();
+  state.plans.forEach(p=>p.exerciseIds.forEach(id=>usedIds.add(id)));
+  const starterNames = new Set(DEFAULT_LIBRARY.map(e=>e.name.toLowerCase()));
+  const exercises = state.library
+    .filter(e=>!(e.aliases && e.aliases.length))
+    .filter(e=>!starterNames.has(e.name.toLowerCase()) || usedIds.has(e.id))
+    .map(e=>({name:e.name, category:e.category, bodyPart:e.bodyPart||''}));
+  let data;
+  try{
+    const res = await fetch(url, {method:'POST', body:JSON.stringify({type:'push', exercises, sessions})});
+    data = await res.json();
+  }catch(err){ return {unconfirmed:true}; }
+  if(!data || data.error || !Array.isArray(data.addedSessions)) return {unsupported:true};
+  data.addedSessions.forEach(n=>{
+    const plan = state.plans.find(p=>p.name.toLowerCase()===String(n).toLowerCase());
+    if(plan) plan.sheetSig = sig[plan.name.toLowerCase()];
+  });
+  saveState();
+  return {sessionsAdded:data.addedSessions.length, sessionsSkipped:(data.skippedSessions||[]).length, exercisesAdded:data.exercisesAdded||0};
+}
+
+// Sends the workout history (Training Log) to the sheet's "history" tab. Append-only.
+async function pushHistoryToSheet(url){
+  const pad = n=>String(n).padStart(2,'0');
+  const history = state.sessions.slice().reverse().map(s=>{
+    const d = new Date(s.date);
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return {
+      date: stamp,
+      name: s.planName,
+      minutes: Math.round((s.durationMs||0)/60000),
+      exercises: s.exercises.map(e=>({name:e.name, sets:e.sets.map(x=>`${x.weight}x${x.reps}`)})),
+    };
+  });
+  if(history.length===0) return {empty:true};
+  let data;
+  try{
+    const res = await fetch(url, {method:'POST', body:JSON.stringify({type:'history', history})});
+    data = await res.json();
+  }catch(err){ return {unconfirmed:true}; }
+  if(!data || data.error || typeof data.added !== 'number') return {unsupported:true};
+  return {added:data.added, skipped:data.skipped||0};
 }
 
 function openSheetSyncModal(){
@@ -3231,11 +3472,44 @@ function openSheetSyncModal(){
       <input type="text" class="namefield" style="margin:0 0 10px 0;width:100%" id="sheetUrlInput" placeholder="Paste your Apps Script Web App URL" value="${state.sheetSyncUrl||''}">
       <div class="sub" style="margin-bottom:14px">Reads Name (col A), Category (col B: empujar/tirar), and Body Part (col C, e.g. Chest/Back/Legs) from your sheet, skipping the header row. Also reads your "sessions" tab, if you have one, to build or update plans.</div>
       <button class="btn primary btn-press" id="syncNowBtn" style="margin-bottom:8px">Sync now</button>
+      <button class="btn ghost btn-press" id="pushSheetBtn" style="margin-bottom:8px">Send my plans to sheet</button>
+      <button class="btn ghost btn-press" id="pushHistoryBtn" style="margin-bottom:8px">Send workout history to sheet</button>
       <button class="btn ghost btn-press" id="removeStartersBtn" style="margin-bottom:8px;color:var(--danger)">Remove starter exercises</button>
       <button class="btn ghost btn-press" id="closeSyncBtn">Close</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeSyncBtn').addEventListener('click', ()=>document.body.removeChild(overlay));
+  overlay.querySelector('#pushSheetBtn').addEventListener('click', async ()=>{
+    const url = overlay.querySelector('#sheetUrlInput').value.trim();
+    if(!url) return;
+    state.sheetSyncUrl = url;
+    saveState();
+    const btn = overlay.querySelector('#pushSheetBtn');
+    btn.textContent = 'Sending…';
+    btn.disabled = true;
+    const r = await pushPlansToSheet(url);
+    btn.textContent = 'Send my plans to sheet';
+    btn.disabled = false;
+    if(r.unsupported) openAlert('The sheet did not accept it. Add the "send" code to your Apps Script and deploy a new version.');
+    else if(r.unconfirmed) openAlert('Sent, but no confirmation came back. Check your sessions tab to see if it arrived.');
+    else openAlert(`Sent: ${r.sessionsAdded} session${r.sessionsAdded===1?'':'s'} added to the sheet, ${r.sessionsSkipped} already there, ${r.exercisesAdded} new exercise${r.exercisesAdded===1?'':'s'}.`);
+  });
+  overlay.querySelector('#pushHistoryBtn').addEventListener('click', async ()=>{
+    const url = overlay.querySelector('#sheetUrlInput').value.trim();
+    if(!url) return;
+    state.sheetSyncUrl = url;
+    saveState();
+    const btn = overlay.querySelector('#pushHistoryBtn');
+    btn.textContent = 'Sending…';
+    btn.disabled = true;
+    const r = await pushHistoryToSheet(url);
+    btn.textContent = 'Send workout history to sheet';
+    btn.disabled = false;
+    if(r.empty) openAlert('No finished workouts to send yet.');
+    else if(r.unsupported) openAlert('The sheet did not accept it. Add the history code to your Apps Script and deploy a new version.');
+    else if(r.unconfirmed) openAlert('Sent, but no confirmation came back. Check your history tab to see if it arrived.');
+    else openAlert(`Sent: ${r.added} workout${r.added===1?'':'s'} added to the sheet, ${r.skipped} already there.`);
+  });
   overlay.querySelector('#removeStartersBtn').addEventListener('click', ()=>{
     openConfirm('Remove the built-in starter exercises? Only ones you added yourself (including via Sheet sync) will remain.', ()=>{
       const starterNames = new Set(DEFAULT_LIBRARY.map(e=>e.name.toLowerCase()));
@@ -3269,7 +3543,7 @@ function openSheetSyncModal(){
         if(bodyPart) bodyPart = bodyPart.charAt(0).toUpperCase() + bodyPart.slice(1).toLowerCase();
         if(!name) return;
         if(category!=='empujar' && category!=='tirar') category = 'empujar';
-        const existing = state.library.find(e=>e.name.toLowerCase()===name.toLowerCase());
+        const existing = findExByName(name);
         if(existing){
           let changed = false;
           if(existing.category !== category){ existing.category = category; changed = true; }
@@ -3284,12 +3558,14 @@ function openSheetSyncModal(){
         }
       });
       const sessRes = await syncSessionsFromSheet(url);
+      const catRes = await syncCatalogFromSheet(url);
       saveState();
       document.body.removeChild(overlay);
       let msg = `Synced: ${added} added, ${updated} updated.`;
-      if(sessRes.unsupported) msg += ' Sessions: add the sessions code to your Apps Script to sync them.';
-      else if(sessRes.error) msg += ' Sessions could not be read.';
-      else msg += ` Sessions: ${sessRes.added} added, ${sessRes.updated} updated.`;
+      if(!sessRes.unsupported && !sessRes.error) msg += ` Sessions: ${sessRes.added} added, ${sessRes.updated} updated.`;
+      if(!catRes.unsupported && !catRes.error) msg += ` Exercise list: ${catRes.count} available to search.`;
+      if(sessRes.unsupported || catRes.unsupported) msg += ' Update your Apps Script to sync sessions and the exercise list.';
+      else if(sessRes.error || catRes.error) msg += ' Some of it could not be read.';
       openAlert(msg);
       render();
     }catch(err){
@@ -3641,6 +3917,7 @@ function openAddToSessionModal(){
   const s = state.activeSession;
   if(!s) return;
   const localSel = [];
+  let query = '';
   let modalScrollRestore = null;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay modal-center';
@@ -3655,15 +3932,27 @@ function openAddToSessionModal(){
     sheet.innerHTML = `
       <div class="topbar" style="padding-top:18px"><span class="title">Add exercises</span><button class="iconbtn btn-press" id="closeAddSx">✕</button></div>
       <div class="hero-mini px"><div class="t">${catLabel(s.category)}</div></div>
+      <div class="addrow" style="margin:10px 24px 6px"><input type="text" id="exSearchSession" placeholder="Search all exercises…"></div>
       <div id="addSxList" style="overflow-y:auto;-webkit-overflow-scrolling:touch;box-sizing:border-box;overscroll-behavior:contain;max-height:50vh;"></div>
       <div class="addrow"><input type="text" id="newSxName" placeholder="+ Add new exercise…"><button class="btn ghost small btn-press" id="addSxNewBtn">Add</button></div>
       <div class="btn-row"><button class="btn primary btn-press ${pullCls}" id="addSxSaveBtn" ${localSel.length===0?'disabled':''}>Add to session (${localSel.length})</button></div>
     `;
     const listEl = sheet.querySelector('#addSxList');
-    if(available.length===0){
-      listEl.innerHTML = `<div class="empty"><div class="big">All added already</div>Every exercise in this category is already in the session.</div>`;
-    } else {
-      groupByBodyPart(available).forEach(({part, exercises})=>{
+    const searchEl = sheet.querySelector('#exSearchSession');
+    searchEl.value = query;
+
+    function fillList(initial){
+      listEl.innerHTML = '';
+      const tokens = exerciseTokens(query);
+      const shown = available.filter(e=>exMatchesAny(e, tokens));
+      const fromCatalog = query.trim().length>=2 ? catalogMatches(query, s.category) : [];
+      if(shown.length===0 && fromCatalog.length===0){
+        listEl.innerHTML = query.trim()
+          ? `<div class="empty">No match</div>`
+          : `<div class="empty"><div class="big">All added already</div>Every exercise in this category is already in the session.</div>`;
+        return;
+      }
+      groupByBodyPart(shown).forEach(({part, exercises})=>{
         const lbl = document.createElement('div');
         lbl.className = 'section-label';
         lbl.textContent = part;
@@ -3682,14 +3971,36 @@ function openAddToSessionModal(){
           listEl.appendChild(row);
         });
       });
+      if(fromCatalog.length){
+        const lbl = document.createElement('div');
+        lbl.className = 'section-label';
+        lbl.textContent = 'More exercises';
+        listEl.appendChild(lbl);
+        fromCatalog.forEach(item=>{
+          const row = document.createElement('div');
+          row.className = `list-row btn-press ${pullCls}`;
+          row.innerHTML = `<div class="name">${item.n}</div>`;
+          row.addEventListener('click', ()=>{
+            const ex = addCatalogExercise(item);
+            localSel.push(ex.id);
+            saveState();
+            query = '';
+            draw();
+          });
+          listEl.appendChild(row);
+        });
+      }
       const firstRow = listEl.querySelector('.list-row');
       if(firstRow) firstRow.style.marginTop = '0';
-      if(modalScrollRestore !== null){
+      if(initial && modalScrollRestore !== null){
         const restoreY = modalScrollRestore;
         modalScrollRestore = null;
         requestAnimationFrame(()=>{ listEl.scrollTop = restoreY; });
       }
     }
+    fillList(true);
+    searchEl.addEventListener('input', ()=>{ query = searchEl.value; fillList(false); });
+
     sheet.querySelector('#closeAddSx').addEventListener('click', ()=>document.body.removeChild(overlay));
     sheet.querySelector('#addSxNewBtn').addEventListener('click', ()=>{
       const name = sheet.querySelector('#newSxName').value.trim();

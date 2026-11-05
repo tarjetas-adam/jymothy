@@ -32,6 +32,8 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  // Sheet sync requests go straight to the network, untouched.
+  if (url.hostname === 'script.google.com' || url.hostname === 'script.googleusercontent.com') return;
 
   // The app itself (index.html / navigations): always try the network first so
   // updates show up right away; fall back to the cached copy when offline.
