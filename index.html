@@ -845,6 +845,17 @@ async function loadState(){
     if(raw){
       state = JSON.parse(raw);
       if(!state.increments) state.increments = {};
+      // Older data kept one set of numbers per exercise. Give every plan its own copy, and make
+      // the next sheet sync a plain "sheet wins" pull so mixed-up copies never reach the sheet.
+      (state.plans||[]).forEach(plan=>{
+        if(plan.targets) return;
+        plan.targets = {};
+        plan.exerciseIds.forEach(id=>{
+          plan.targets[id] = cloneSets((state.baselines && state.baselines[id]) || [{weight:0,reps:"10"}]);
+        });
+        plan.sheetSig = {};
+        delete plan.sheetStruct;
+      });
       return;
     }
   }catch(e){}
@@ -913,6 +924,22 @@ function groupByBodyPart(exercises){
   return order.map(part=>({part, exercises:groups[part]||[]})).filter(g=>g.exercises.length);
 }
 function getBaseline(id){ return state.baselines[id] || [{weight:0,reps:"10"}]; }
+// Every plan keeps its own numbers for each of its exercises (plan.targets), so the same
+// exercise can have different weights and reps in different plans.
+function cloneSets(sets){ return sets.map(s=>({weight:s.weight, reps:s.reps})); }
+function planSets(plan, id){
+  if(!plan) return getBaseline(id);
+  if(!plan.targets) plan.targets = {};
+  if(!plan.targets[id]) plan.targets[id] = cloneSets(getBaseline(id));
+  return plan.targets[id];
+}
+function setPlanSets(plan, id, sets){
+  if(plan){
+    if(!plan.targets) plan.targets = {};
+    plan.targets[id] = sets;
+  }
+  state.baselines[id] = cloneSets(sets);   // latest numbers, used to start new plans
+}
 function getIncrement(id){ return state.increments[id] || 2.5; }
 function setIncrement(id, val){ state.increments[id] = val; saveState(); }
 function parseReps(str){
@@ -1782,7 +1809,7 @@ function buildPlanExportText(plan){
   plan.exerciseIds.forEach(exId=>{
     const ex = getEx(exId);
     if(!ex) return;
-    const sets = getBaseline(exId);
+    const sets = planSets(plan, exId);
     if(sets.length===0) return;
     const setsCount = sets.length;
     const lastSet = sets[sets.length-1];
@@ -2102,6 +2129,7 @@ function openImportRoutineModal(){
       return;
     }
     const exerciseIds = [];
+    const importedTargets = {};
     exerciseLines.forEach(line=>{
       let existing = findExByName(line.name);
       if(!existing){
@@ -2109,14 +2137,15 @@ function openImportRoutineModal(){
         state.library.push(existing);
       }
       if(line.rangeNote) existing.repRangeNote = line.rangeNote;
-      state.baselines[existing.id] = Array.from({length:Math.max(1,line.sets)}, ()=>({weight:line.weight, reps:String(line.reps)}));
+      importedTargets[existing.id] = Array.from({length:Math.max(1,line.sets)}, ()=>({weight:line.weight, reps:String(line.reps)}));
+      state.baselines[existing.id] = cloneSets(importedTargets[existing.id]);
       exerciseIds.push(existing.id);
     });
     const pushCount = exerciseIds.filter(id=>{ const e=getEx(id); return e && e.category==='empujar'; }).length;
     const category = (exerciseIds.length-pushCount) > pushCount ? 'tirar' : 'empujar';
     const plan = {
       id:uid(), name: planName || 'Imported Plan', category,
-      exerciseIds, createdAt:new Date().toISOString()
+      exerciseIds, createdAt:new Date().toISOString(), targets:importedTargets
     };
     if(restSeconds) plan.restSeconds = restSeconds;
     state.plans.push(plan);
@@ -2144,7 +2173,8 @@ function openPlanNameModal(){
   setTimeout(()=>{ input.focus(); }, 50);
   overlay.querySelector('#savePlanBtn').addEventListener('click', ()=>{
     const name = input.value.trim() || (wizard.category==='empujar'?'Push Day':'Pull Day');
-    const plan = {id:uid(), name, category:wizard.category, exerciseIds:[...wizard.selected], createdAt:new Date().toISOString()};
+    const plan = {id:uid(), name, category:wizard.category, exerciseIds:[...wizard.selected], createdAt:new Date().toISOString(), targets:{}};
+    plan.exerciseIds.forEach(id=>planSets(plan, id));
     state.plans.push(plan);
     saveState();
     newPlanExIds = [...plan.exerciseIds];
@@ -2264,7 +2294,7 @@ function renderPlanDetail({planId}){
 }
 
 function renderPlanExEditBody(ex, exId, plan, cat){
-  const sets = getBaseline(exId);
+  const sets = planSets(plan, exId);
   const rangeNoteHTML = ex.repRangeNote ? ` <span class="rep-range-note nodrag">(${ex.repRangeNote})</span>` : '';
   const setsHTML = sets.map((s,si)=>{
     const {segments} = parseReps(s.reps);
@@ -2303,17 +2333,17 @@ function bindPlanExEditBody(list, plan){
   list.querySelectorAll('[data-pfield]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const exId = btn.dataset.exid, si = btn.dataset.si, field = btn.dataset.pfield;
-      const sets = getBaseline(exId);
+      const sets = planSets(plan, exId);
       if(field==='weight'){
         openNumpad(sets[si].weight, 'Weight (kg)', true, v=>{
-          const s2 = getBaseline(exId);
-          s2[si].weight = v; state.baselines[exId] = s2;
+          const s2 = planSets(plan, exId);
+          s2[si].weight = v; setPlanSets(plan, exId, s2);
           saveState(); render();
         });
       } else if(field==='repsA'){
         const {segments} = parseReps(sets[si].reps);
         openNumpad(segments[0], 'Reps', false, v=>{
-          const s2 = getBaseline(exId);
+          const s2 = planSets(plan, exId);
           const {segments:seg2} = parseReps(s2[si].reps);
           const newA = Math.round(v);
           if(seg2.length>1){
@@ -2323,19 +2353,19 @@ function bindPlanExEditBody(list, plan){
             seg2[0] = newA;
           }
           s2[si].reps = seg2.join('+');
-          state.baselines[exId] = s2;
+          setPlanSets(plan, exId, s2);
           saveState(); render();
         });
       } else if(field==='repsB'){
         const {segments} = parseReps(sets[si].reps);
         openNumpad(segments[1], 'Reps after pause', false, v=>{
-          const s2 = getBaseline(exId);
+          const s2 = planSets(plan, exId);
           const {segments:seg2} = parseReps(s2[si].reps);
           const newB = Math.round(v);
           const total = seg2[0]+seg2[1];
           seg2[1] = newB; seg2[0] = Math.max(0, total-newB);
           s2[si].reps = seg2.join('+');
-          state.baselines[exId] = s2;
+          setPlanSets(plan, exId, s2);
           saveState(); render();
         });
       }
@@ -2344,7 +2374,7 @@ function bindPlanExEditBody(list, plan){
   list.querySelectorAll('.pausebtn[data-pausesi]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const exId = btn.dataset.exid, si = btn.dataset.pausesi;
-      const sets = getBaseline(exId);
+      const sets = planSets(plan, exId);
       const {segments} = parseReps(sets[si].reps);
       if(segments.length>1){
         sets[si].reps = String(segments[0]+segments[1]);
@@ -2354,26 +2384,26 @@ function bindPlanExEditBody(list, plan){
         const first = Math.max(1, total-second);
         sets[si].reps = `${first}+${second}`;
       }
-      state.baselines[exId] = sets;
+      setPlanSets(plan, exId, sets);
       saveState(); render();
     });
   });
   list.querySelectorAll('[data-delsi]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const exId = btn.dataset.exid, si = parseInt(btn.dataset.delsi);
-      const sets = getBaseline(exId);
+      const sets = planSets(plan, exId);
       sets.splice(si,1);
-      state.baselines[exId] = sets;
+      setPlanSets(plan, exId, sets);
       saveState(); render();
     });
   });
   list.querySelectorAll('[data-addset]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const exId = btn.dataset.addset;
-      const sets = getBaseline(exId);
+      const sets = planSets(plan, exId);
       const last = sets[sets.length-1] || {weight:20,reps:"10"};
       sets.push({weight:last.weight, reps:last.reps});
-      state.baselines[exId] = sets;
+      setPlanSets(plan, exId, sets);
       saveState(); render();
     });
   });
@@ -2522,6 +2552,7 @@ function openAddExercisesModal(plan){
     });
     sheet.querySelector('#addSaveBtnModal').addEventListener('click', ()=>{
       plan.exerciseIds.push(...localSel);
+      localSel.forEach(id=>planSets(plan, id));
       newPlanExIds = [...localSel];
       saveState();
       sheet.style.transition = 'transform .7s cubic-bezier(.4,0,.2,1), opacity .6s ease';
@@ -2955,7 +2986,7 @@ function startSession(plan){
   const exercisesState = {};
   const originalBaselines = {};
   plan.exerciseIds.forEach(id=>{
-    const bl = getBaseline(id);
+    const bl = planSets(plan, id);
     exercisesState[id] = { sets: bl.map(s=>({weight:s.weight, reps:s.reps, done:false})) };
     originalBaselines[id] = bl.map(s=>({weight:s.weight, reps:s.reps}));
   });
@@ -3336,10 +3367,10 @@ async function syncSessionsFromSheet(url, sheetNames){
   }
   const norm = sets => sets.map(s=>`${s.weight}x${s.reps}`).join('|');
   const sameList = (x,y)=>JSON.stringify(x)===JSON.stringify(y);
-  const stateOf = plan => JSON.stringify([plan.exerciseIds, plan.restSeconds||0, plan.exerciseIds.map(id=>norm(getBaseline(id)))]);
+  const stateOf = plan => JSON.stringify([plan.exerciseIds, plan.restSeconds||0, plan.exerciseIds.map(id=>norm(planSets(plan, id)))]);
   const commit = (plan)=>{
     const sig = {};
-    plan.exerciseIds.forEach(id=>{ sig[id] = norm(getBaseline(id)); });
+    plan.exerciseIds.forEach(id=>{ sig[id] = norm(planSets(plan, id)); });
     plan.sheetSig = sig;
     plan.sheetStruct = {ids:[...plan.exerciseIds], rest:plan.restSeconds||0};
   };
@@ -3347,22 +3378,6 @@ async function syncSessionsFromSheet(url, sheetNames){
   let added = 0, updated = 0, conflicts = 0;
   const toPush = [];                 // plans that must be written to the sheet
   const inSheet = new Set();
-
-  // The app keeps ONE set of numbers per exercise. If the sheet gives the same exercise
-  // different numbers in different sessions, never write the app's numbers back over them.
-  const seenSets = {};
-  data.sessions.forEach(sess=>{
-    (sess.exercises||[]).forEach(row=>{
-      const key = String(row.name||'').trim().toLowerCase();
-      if(!key) return;
-      const ex = findExByName(key);
-      const k = ex ? ex.name.toLowerCase() : key;
-      const sig = (row.sets||[]).map(parseSheetSet).filter(Boolean).map(s=>`${s.weight}x${s.reps}`).join('|');
-      (seenSets[k] = seenSets[k] || new Set()).add(sig);
-    });
-  });
-  const sharedNames = new Set(Object.keys(seenSets).filter(k=>seenSets[k].size>1));
-  const sharedShown = new Set();
 
   data.sessions.forEach(sess=>{
     const name = String(sess.name||'').trim();
@@ -3424,24 +3439,23 @@ async function syncSessionsFromSheet(url, sheetNames){
     else if(plan.restSeconds !== undefined) finalRest = plan.restSeconds;
     else finalRest = sheetRest || 90;
 
-    // set targets, exercise by exercise
+    // set targets, exercise by exercise (each plan keeps its own numbers)
+    const defaultSets = ()=>[{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}];
     finalIds.forEach(id=>{
       const row = rows.find(r=>r.ex.id===id);
-      const hasBaseline = !!state.baselines[id];
-      const appNorm = hasBaseline ? norm(getBaseline(id)) : null;
+      const current = plan.targets && plan.targets[id] ? plan.targets[id] : null;
+      const appNorm = current ? norm(current) : null;
       const lastNorm = lastSig[id];
-      if(!row){ if(!hasBaseline) state.baselines[id] = [{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}]; return; }
-      const shared = sharedNames.has(row.ex.name.toLowerCase());
-      if(shared) sharedShown.add(row.ex.name);
+      if(!row){ if(!current) setPlanSets(plan, id, defaultSets()); return; }
       const sheetChanged = row.sets.length>0 && row.sheetNorm !== lastNorm;
-      const appChanged = hasBaseline && appNorm !== lastNorm;
+      const appChanged = !!current && appNorm !== lastNorm;
       if(sheetChanged){
-        state.baselines[id] = row.sets;
-        if(!shared && lastNorm !== undefined && appChanged && appNorm !== row.sheetNorm) conflicts++;
+        setPlanSets(plan, id, row.sets);
+        if(lastNorm !== undefined && appChanged && appNorm !== row.sheetNorm) conflicts++;
       } else if(appChanged && lastNorm !== undefined){
-        if(!shared) pushNeeded = true;
-      } else if(!hasBaseline){
-        state.baselines[id] = [{weight:20,reps:'10'},{weight:20,reps:'10'},{weight:20,reps:'10'}];
+        pushNeeded = true;
+      } else if(!current){
+        setPlanSets(plan, id, defaultSets());
       }
     });
 
@@ -3472,7 +3486,7 @@ async function syncSessionsFromSheet(url, sheetNames){
     .filter(e=>!sheetNames || !sheetNames.has(e.name.toLowerCase()))
     .map(e=>({name:e.name, category:e.category, bodyPart:e.bodyPart||''}));
 
-  const result = {added, updated, conflicts, pushed:0, exercisesPushed:0, shared:[...sharedShown]};
+  const result = {added, updated, conflicts, pushed:0, exercisesPushed:0};
   if(toPush.length===0 && newExercises.length===0) return result;
 
   const payload = {
@@ -3480,7 +3494,7 @@ async function syncSessionsFromSheet(url, sheetNames){
     exercises:newExercises,
     sessions:toPush.map(({plan,mode})=>({
       name:plan.name, rest:plan.restSeconds||0, mode,
-      exercises:plan.exerciseIds.filter(id=>getEx(id)).map(id=>({name:getEx(id).name, sets:getBaseline(id).map(s=>`${s.weight}x${s.reps}`)})),
+      exercises:plan.exerciseIds.filter(id=>getEx(id)).map(id=>({name:getEx(id).name, sets:planSets(plan, id).map(s=>`${s.weight}x${s.reps}`)})),
     })),
   };
   let resp;
@@ -3628,7 +3642,6 @@ function openSheetSyncModal(){
       if(!catRes.unsupported && !catRes.error) bits.push(`${catRes.count} exercises to search`);
       let msg = bits.length ? 'Synced. ' + bits.join('. ') + '.' : 'Synced. Everything is up to date.';
       if(!sessRes.unsupported && !sessRes.error && sessRes.conflicts) msg += ` ${sessRes.conflicts} change${sessRes.conflicts===1?' was':'s were'} made in both places, so the sheet's version was kept.`;
-      if(!sessRes.unsupported && !sessRes.error && sessRes.shared && sessRes.shared.length) msg += ` The sheet gives different numbers for the same exercise in several plans (${sessRes.shared.slice(0,3).join(', ')}${sessRes.shared.length>3?', …':''}). The app keeps one set of numbers per exercise, so it may not match every plan.`;
       if(sessRes.pushError==='failed') msg += ' Changes could not be sent to the sheet this time.';
       if(sessRes.unsupported || catRes.unsupported || sessRes.pushError==='unsupported' || histRes.unsupported) msg += ' Update your Apps Script to get the full sync.';
       else if(sessRes.error || catRes.error || histRes.unconfirmed) msg += ' Part of it could not be read.';
@@ -4082,8 +4095,9 @@ function openAddToSessionModal(){
     });
     sheet.querySelector('#addSxSaveBtn').addEventListener('click', ()=>{
       if(!s.originalBaselines) s.originalBaselines = {};
+      const sessionPlan = state.plans.find(p=>p.id===s.planId);
       localSel.forEach(id=>{
-        const bl = getBaseline(id);
+        const bl = planSets(sessionPlan, id);
         s.exercisesState[id] = { sets: bl.map(x=>({weight:x.weight, reps:x.reps, done:false})) };
         s.originalBaselines[id] = bl.map(x=>({weight:x.weight, reps:x.reps}));
         s.exerciseOrder.push(id);
@@ -4162,7 +4176,7 @@ function finishSession(){
       }
       return {weight:orig.weight, reps:orig.reps};
     });
-    state.baselines[exId] = newBaseline;
+    setPlanSets(plan, exId, newBaseline);
   });
 
   const durationMs = s.startedAt ? Math.max(0, Date.now() - new Date(s.startedAt).getTime()) : 0;
