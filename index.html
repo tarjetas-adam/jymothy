@@ -444,6 +444,9 @@ h1.hero{
 }
 .bottombar-inner{max-width:560px;margin:0 auto;display:flex;gap:10px;}
 .bottombar-inner .btn{flex:1;padding-left:6px;padding-right:6px;white-space:nowrap;}
+.add-set-dashed{display:block;width:100%;box-sizing:border-box;padding:12px 0;background:none;border:2px dashed var(--card);border-radius:18px;color:var(--push);font-family:inherit;font-size:24px;line-height:1;cursor:pointer;-webkit-appearance:none;appearance:none;}
+.add-set-dashed:active{background:var(--card);}
+.runner-hint{font-size:12px;color:var(--push);padding:10px 4px 0;}
 .bottom-spacer{height:82px;}
 .hero-mini{padding:8px 24px 4px 24px;}
 .hero-mini .t{font-family:'Anton',sans-serif;font-size:32px;text-transform:uppercase;line-height:1;}
@@ -1590,7 +1593,6 @@ function renderPlanList(){
     });
     const firstSlot = listWrap.querySelector('.menu-slot');
     if(firstSlot) firstSlot.style.marginTop = '0';
-    attachSlowSnapScroll(scrollArea, '.menu-slot', 5);
 
     makeReorderable(listWrap, '.menu-slot', {
       scrollBoundsEl: scrollArea,
@@ -2286,10 +2288,14 @@ function renderPlanDetail({planId}){
     }, 'Delete plan');
   });
 
+  // Sit the buttons (and the area behind them) lower: the page normally keeps 40px free at
+  // the bottom; here the screen reaches 40px further down, so the list gets that room too.
   requestAnimationFrame(()=>{
     const top = pageWrap.getBoundingClientRect().top;
     const appBottomPad = parseFloat(getComputedStyle(app).paddingBottom) || 0;
-    pageWrap.style.height = `calc(100vh - ${top}px - ${appBottomPad}px)`;
+    const lift = Math.min(40, appBottomPad);
+    pageWrap.style.height = `calc(100vh - ${top}px - ${appBottomPad - lift}px)`;
+    pageWrap.style.marginBottom = `-${lift}px`;
   });
 }
 
@@ -3088,11 +3094,35 @@ function renderSessionRunner(){
   }
   const clockHTML = planRestSeconds ? `<span class="rest-clock"><span id="restClockNum" data-exid="${restTimerEndTime ? restTimerExId : exId}">${clockDisplay}</span></span>` : '';
   hero.innerHTML = `<div class="eyebrow ${cat==='empujar'?'push':'pull'}">Exercise ${idx+1} of ${total}</div>
-    <div style="display:flex;align-items:center;">
+    <div id="exTitleRow" style="display:flex;align-items:center;">
       <div class="t" id="exTitleText">${ex ? ex.name : '—'}</div>
       ${clockHTML}
     </div>`;
   app.appendChild(hero);
+
+  // press and hold the exercise name to remove the exercise from this session
+  (function(){
+    const row = hero.querySelector('#exTitleRow');
+    row.style.userSelect = 'none';
+    row.style.webkitUserSelect = 'none';
+    row.style.webkitTouchCallout = 'none';
+    let timer = null, sx = 0, sy = 0;
+    const cancel = ()=>{ clearTimeout(timer); timer = null; };
+    row.addEventListener('pointerdown', e=>{
+      sx = e.clientX; sy = e.clientY;
+      cancel();
+      timer = setTimeout(()=>{
+        timer = null;
+        try{ if(navigator.vibrate) navigator.vibrate(25); }catch(_){}
+        removeExerciseFromSession(exId);
+      }, 550);
+    });
+    row.addEventListener('pointermove', e=>{ if(Math.abs(e.clientX-sx)>10 || Math.abs(e.clientY-sy)>10) cancel(); });
+    row.addEventListener('pointerup', cancel);
+    row.addEventListener('pointerleave', cancel);
+    row.addEventListener('pointercancel', cancel);
+    row.addEventListener('contextmenu', e=>e.preventDefault());
+  })();
 
   const list = document.createElement('div');
   list.id='runnerSets';
@@ -3305,12 +3335,9 @@ function renderSessionRunner(){
   const addSetRow = document.createElement('div');
   addSetRow.className='px'+(advanced?' ex-enter':'');
   addSetRow.style.marginTop='4px';
-  addSetRow.style.display = 'flex';
-  addSetRow.style.gap = '10px';
-  addSetRow.innerHTML = `<button class="btn ghost small btn-press" id="addRunnerSetBtn">+ Add set</button>
-    <button class="btn ghost small btn-press" id="removeRunnerExBtn">Remove exercise</button>`;
+  addSetRow.innerHTML = `<button class="add-set-dashed btn-press" id="addRunnerSetBtn" aria-label="Add set">+</button>` +
+    (idx===0 ? `<div class="runner-hint">Hold the exercise name to remove it.</div>` : '');
   app.appendChild(addSetRow);
-  addSetRow.querySelector('#removeRunnerExBtn').addEventListener('click', ()=>removeExerciseFromSession(exId));
   addSetRow.querySelector('#addRunnerSetBtn').addEventListener('click', ()=>{
     const last = exState.sets[exState.sets.length-1] || {weight:20,reps:"10"};
     exState.sets.push({weight:last.weight, reps:last.reps, done:false});
@@ -3326,16 +3353,35 @@ function renderSessionRunner(){
   bottomBar.className='bottombar';
   bottomBar.innerHTML = `<div class="bottombar-inner${advanced?' ex-enter':''}">
       <button class="btn ghost small btn-press" id="zoomBtn">Overview</button>
-      <button class="btn ghost small btn-press" id="finishBtn">End session</button>
-      <button class="btn ghost small btn-press" id="cancelSessionBtn">Cancel</button>
+      <button class="btn ghost small btn-press" id="finishBtn">End</button>
     </div>`;
   app.appendChild(bottomBar);
   bottomBar.querySelector('#zoomBtn').addEventListener('click', (e)=>{ flushSessionRunnerTimeouts(); pushExpand('sessionOverview', e.currentTarget); });
-  bottomBar.querySelector('#finishBtn').addEventListener('click', ()=>{
-    openConfirm('Are you sure you want to end the session?', finishSession, 'End session');
-  });
-  bottomBar.querySelector('#cancelSessionBtn').addEventListener('click', ()=>{
-    openConfirm('Cancel this session? Nothing will be saved and your plan stays as it was.', cancelSession, 'Cancel session');
+  bottomBar.querySelector('#finishBtn').addEventListener('click', openEndSessionSheet);
+}
+
+// "End" asks what to do: save the workout, keep going, or throw it away.
+function openEndSessionSheet(){
+  const s = state.activeSession;
+  if(!s) return;
+  const logged = s.exerciseOrder.reduce((n,id)=>n + (s.exercisesState[id] ? s.exercisesState[id].sets.filter(x=>x.done).length : 0), 0);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay modal-center';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="field-label">End session</div>
+      <div class="sub" style="margin-bottom:14px">${logged} set${logged===1?'':'s'} logged so far.</div>
+      <button class="btn ghost btn-press" id="endSaveBtn" style="margin-bottom:8px">Finish &amp; save</button>
+      <button class="btn ghost btn-press" id="endKeepBtn">Keep going</button>
+      <button id="endDiscardBtn" style="display:block;margin:14px auto 0;background:none;border:none;color:var(--push-dim);font-size:14px;font-weight:600;text-decoration:underline;padding:6px;">Discard session</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = ()=>{ if(overlay.parentNode) document.body.removeChild(overlay); };
+  overlay.querySelector('#endKeepBtn').addEventListener('click', close);
+  overlay.querySelector('#endSaveBtn').addEventListener('click', ()=>{ close(); finishSession(); });
+  overlay.querySelector('#endDiscardBtn').addEventListener('click', ()=>{
+    close();
+    openConfirm('Discard this session? Nothing will be saved and your plan stays as it was.', cancelSession, 'Discard');
   });
 }
 
