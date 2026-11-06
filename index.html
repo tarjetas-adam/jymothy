@@ -1459,7 +1459,7 @@ function render(){
   const isSessionTheme = sessionScreens.includes(screen) && !!state.activeSession;
   document.body.classList.toggle('session-theme', isSessionTheme);
   document.documentElement.classList.toggle('session-theme', isSessionTheme);
-  document.querySelectorAll('body > .dragging').forEach(el=>el.remove());
+  document.querySelectorAll('body > .dragging, body > .summary-bar').forEach(el=>el.remove());
   app.innerHTML = "";
   (renderers[screen]||renderHome)(params||{});
   requestAnimationFrame(adjustFixedBottomForViewport);
@@ -4286,12 +4286,21 @@ function renderSessionSummary(){
     <div class="sub" style="margin-top:2px">${session ? session.exercises.length : 0} exercises logged to your Training Log.</div>`;
   app.appendChild(hero);
 
+  // "Back to home" stays pinned at the bottom of the screen the whole time
+  function addPinnedHomeButton(){
+    const bar = document.createElement('div');
+    bar.className = 'bottombar summary-bar';
+    bar.innerHTML = `<div class="bottombar-inner"><button class="btn primary btn-press" id="doneBtn" style="color:var(--text)">Back to home</button></div>`;
+    document.body.appendChild(bar);
+    bar.querySelector('#doneBtn').addEventListener('click', toHome);
+    const spacer = document.createElement('div');
+    spacer.style.height = 'calc(92px + var(--safe-bottom))';
+    app.appendChild(spacer);
+    requestAnimationFrame(adjustFixedBottomForViewport);
+  }
+
   if(!session || !session.exercises.length){
-    const btnRow0 = document.createElement('div');
-    btnRow0.className='btn-row';
-    btnRow0.innerHTML = `<button class="btn primary btn-press" id="doneBtn" style="color:var(--text)">Back to home</button>`;
-    app.appendChild(btnRow0);
-    btnRow0.querySelector('#doneBtn').addEventListener('click', toHome);
+    addPinnedHomeButton();
     return;
   }
 
@@ -4314,7 +4323,7 @@ function renderSessionSummary(){
     row.style.background = 'transparent';
     row.style.flexDirection = 'column';
     row.style.alignItems = 'stretch';
-    row.innerHTML = `<div class="name" style="opacity:0;transform:translateY(8px);"></div>`;
+    row.innerHTML = `<div class="name" style="opacity:0;transform:translateY(14px);"></div>`;
     row.querySelector('.name').textContent = ex.name;
     app.appendChild(row);
     improvedRows.push({row, bumps: exBumps});
@@ -4333,17 +4342,13 @@ function renderSessionSummary(){
     const row = document.createElement('div');
     row.className='list-row';
     row.style.background = 'transparent';
-    row.innerHTML = `<div class="name" style="opacity:0;transform:translateY(8px);"></div>`;
+    row.innerHTML = `<div class="name" style="opacity:0;transform:translateY(14px);"></div>`;
     row.querySelector('.name').textContent = ex.name;
     app.appendChild(row);
     plainRows.push(row);
   });
 
-  const btnRow = document.createElement('div');
-  btnRow.className='btn-row';
-  btnRow.innerHTML = `<button class="btn primary btn-press" id="doneBtn" style="color:var(--text)">Back to home</button>`;
-  app.appendChild(btnRow);
-  btnRow.querySelector('#doneBtn').addEventListener('click', toHome);
+  addPinnedHomeButton();
 
   function bumpValueText(weight, reps){ return `${weight}kg × ${fmtReps(reps)}`; }
   function charSpans(text){
@@ -4352,17 +4357,17 @@ function renderSessionSummary(){
 
   function fadeInBoxShell(row){
     return new Promise(resolve=>{
-      row.style.transition = 'background .35s ease';
+      row.style.transition = 'background .6s ease';
       row.style.background = 'var(--card)';
-      setTimeout(resolve, 300);
+      setTimeout(resolve, 450);
     });
   }
   function fadeInLine(el, targetOpacity){
     return new Promise(resolve=>{
-      el.style.transition = 'opacity .4s ease, transform .4s cubic-bezier(.16,1,.3,1)';
+      el.style.transition = 'opacity .8s ease, transform .8s cubic-bezier(.2,.7,.2,1)';
       el.style.opacity = targetOpacity;
       el.style.transform = 'translateY(0)';
-      setTimeout(resolve, 320);
+      setTimeout(resolve, 520);
     });
   }
 
@@ -4373,7 +4378,7 @@ function renderSessionSummary(){
       bumpEl.style.opacity = '0';
       bumpEl.innerHTML = `<span class="bump-label">↑ Set ${b.setNum}:</span> <span class="bump-value"></span><span class="improve-arrows" style="position:relative;display:inline-flex;"></span>`;
       row.appendChild(bumpEl);
-      bumpEl.scrollIntoView({behavior:'smooth', block:'nearest'});
+      followWithScroll(bumpEl, 700);
       const valueEl = bumpEl.querySelector('.bump-value');
       const arrowsEl = bumpEl.querySelector('.improve-arrows');
       const fromText = bumpValueText(b.fromWeight, b.fromReps);
@@ -4407,28 +4412,58 @@ function renderSessionSummary(){
     });
   }
 
-  function scrollRowIntoView(el){
-    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+  // --- smooth auto-scroll: eased, started a moment before each row appears ---
+  let scrollAnim = null, userTookOver = false;
+  ['touchstart','wheel','keydown'].forEach(evt=>window.addEventListener(evt, ()=>{
+    userTookOver = true;
+    if(scrollAnim){ cancelAnimationFrame(scrollAnim); scrollAnim = null; }
+  }, {passive:true, once:true}));
+  function smoothScrollToY(y, dur){
+    const maxY = document.documentElement.scrollHeight - window.innerHeight;
+    y = Math.max(0, Math.min(y, maxY));
+    const startY = window.scrollY, delta = y - startY;
+    if(Math.abs(delta) < 2) return;
+    if(scrollAnim) cancelAnimationFrame(scrollAnim);
+    let t0 = null;
+    function step(t){
+      if(t0 === null) t0 = t;
+      const p = Math.min(1, (t - t0) / dur);
+      const e = p < .5 ? 4*p*p*p : 1 - Math.pow(-2*p + 2, 3) / 2;
+      window.scrollTo(0, startY + delta * e);
+      if(p < 1) scrollAnim = requestAnimationFrame(step); else scrollAnim = null;
+    }
+    scrollAnim = requestAnimationFrame(step);
   }
+  function followWithScroll(el, dur){
+    if(userTookOver) return;
+    const bar = document.querySelector('.summary-bar');
+    const room = (bar ? bar.getBoundingClientRect().height : 90) + 12;
+    const target = window.scrollY + el.getBoundingClientRect().bottom - (window.innerHeight - room);
+    if(target > window.scrollY + 2) smoothScrollToY(target, dur || 1000);
+  }
+  const sleep = ms => new Promise(r=>setTimeout(r, ms));
 
   (async ()=>{
     for(const {row, bumps: exBumps} of improvedRows){
-      scrollRowIntoView(row);
+      followWithScroll(row, 1000);
+      await sleep(250);
       await fadeInBoxShell(row);
       await fadeInLine(row.querySelector('.name'), '1');
-      await new Promise(r=>setTimeout(r, 900));
+      await sleep(900);
       for(const b of exBumps){
         await animateBumpLine(row, b);
       }
     }
     if(plainLabel){
-      scrollRowIntoView(plainLabel);
-      plainLabel.style.transition = 'opacity .5s ease';
+      followWithScroll(plainLabel, 900);
+      await sleep(200);
+      plainLabel.style.transition = 'opacity .8s ease';
       plainLabel.style.opacity = '1';
-      await new Promise(r=>setTimeout(r, 400));
+      await sleep(500);
     }
     for(const row of plainRows){
-      scrollRowIntoView(row);
+      followWithScroll(row, 900);
+      await sleep(250);
       await fadeInBoxShell(row);
       await fadeInLine(row.querySelector('.name'), '.85');
     }
